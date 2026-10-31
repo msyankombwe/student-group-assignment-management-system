@@ -1,0 +1,44 @@
+{% extends "core/base.html" %}
+{% block title %}Submission receipt · UNILUS SGAMS{% endblock %}
+{% block content %}
+<section class="card shadow-sm">
+    <div class="card-body">
+        <h1 class="h4">Submission confirmation</h1>
+        <p class="text-secondary">This receipt is shown only after the submission was saved successfully.</p>
+        <dl class="row mb-0">
+            <dt class="col-sm-3">Assignment</dt><dd class="col-sm-9">{{ submission.assignment.title }}</dd>
+            <dt class="col-sm-3">Group</dt><dd class="col-sm-9">{{ submission.group.name }}</dd>
+            <dt class="col-sm-3">Submitted by</dt><dd class="col-sm-9">{{ submission.submitted_by.username }}</dd>
+            <dt class="col-sm-3">Date/time</dt><dd class="col-sm-9">{{ submission.submitted_at|date:"M j, Y H:i:s" }}</dd>
+            <dt class="col-sm-3">Status</dt><dd class="col-sm-9"><span class="badge {% if submission.status == 'feedback_published' %}text-bg-success{% elif submission.is_late %}text-bg-warning{% elif submission.status == 'under_review' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ submission.get_status_display }}</span></dd>
+            <dt class="col-sm-3">File</dt><dd class="col-sm-9">{{ submission.original_filename|default:submission.file.name }}</dd>
+            <dt class="col-sm-3">Submission notes</dt><dd class="col-sm-9">{{ submission.notes|default:"None provided" }}</dd>
+            {% if submission.is_late %}
+                <dt class="col-sm-3">Deadline</dt><dd class="col-sm-9"><span class="badge text-bg-warning">Submitted after {{ submission.assignment.deadline|date:"M j, Y H:i" }}</span></dd>
+            {% endif %}
+        </dl>
+        <p class="mt-3 mb-0">
+            <a class="btn btn-outline-primary" href="{% url 'submission_download' submission.pk %}">Download submitted document</a>
+            {% if submission.moodle_reference %}
+                <a class="btn btn-outline-secondary" href="{{ submission.moodle_reference }}" target="_blank" rel="noopener noreferrer">Open recorded Moodle reference</a>
+            {% endif %}
+        </p>
+        {% if show_feedback and submission.grade %}
+            {% if submission.grade.is_released %}
+                <section class="alert alert-success mt-3 mb-0">
+                    <h2 class="h6">Lecturer feedback published</h2>
+                    <p class="mb-1">Assessment: {{ submission.grade.score }}/{{ submission.grade.max_score }}</p>
+                    <div>{{ submission.grade.feedback|linebreaks }}</div>
+                    <small>Published {{ submission.grade.released_at|date:"M j, Y H:i" }}</small>
+                </section>
+            {% elif can_review %}
+                <section class="alert alert-secondary mt-3 mb-0">
+                    <h2 class="h6">Feedback not yet published</h2>
+                    <p class="mb-0">Saved assessment: {{ submission.grade.score }}/{{ submission.grade.max_score }}. Students cannot view this feedback until it is released.</p>
+                </section>
+            {% endif %}
+        {% endif %}
+        <a class="btn btn-primary mt-3" href="{% url 'group_detail' submission.group_id %}">Back to group</a>
+    </div>
+</section>
+{% endblock %}

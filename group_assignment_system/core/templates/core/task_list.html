@@ -1,0 +1,47 @@
+{% extends "core/base.html" %}
+{% block title %}Tasks · UNILUS SGAMS{% endblock %}
+{% block content %}
+<header class="page-heading d-flex flex-wrap justify-content-between align-items-end gap-3">
+    <div>
+        <p class="text-uppercase small fw-semibold text-secondary mb-1">Work planning</p>
+        <h1 class="h2 mb-1">{% if request.user.is_student %}Group tasks{% else %}Task monitoring{% endif %}</h1>
+        <p class="mb-0">{% if request.user.is_student %}Tasks from your approved group workspaces.{% else %}Tasks in groups within your authorised scope.{% endif %}</p>
+    </div>
+</header>
+
+<section class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr><th scope="col">Task</th><th scope="col">Course &amp; assignment</th><th scope="col">Group</th><th scope="col">Assigned to</th><th scope="col">Priority</th><th scope="col">Deadline</th><th scope="col">Status</th></tr>
+            </thead>
+            <tbody>
+                {% for task in tasks %}
+                    <tr>
+                        <th scope="row"><a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a></th>
+                        <td>{{ task.group.assignment.course.code|default:task.group.assignment.course.name }}<br><span class="small text-secondary">{{ task.group.assignment.title }}</span></td>
+                        <td><a href="{% url 'group_detail' task.group_id %}">{{ task.group.name }}</a></td>
+                        <td>{{ task.assigned_to.get_full_name|default:task.assigned_to.username }}</td>
+                        <td><span class="badge {% if task.priority == 'urgent' %}text-bg-danger{% elif task.priority == 'high' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ task.get_priority_display }}</span></td>
+                        <td class="tabular-nums">{% if task.deadline %}{{ task.deadline|date:"M j, Y H:i" }}{% else %}Not set{% endif %}</td>
+                        <td>
+                            <span class="badge {% if task.is_overdue %}text-bg-danger{% elif task.status == 'completed' %}text-bg-success{% elif task.status == 'under_review' %}text-bg-info{% elif task.status == 'in_progress' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ task.effective_status_display }}</span>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr><td class="empty-state" colspan="7">No tasks are available in your authorised groups.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if page_obj.has_other_pages %}
+        <nav class="p-3" aria-label="Task pages">
+            <ul class="pagination pagination-sm mb-0">
+                {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a></li>{% endif %}
+                <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+                {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+            </ul>
+        </nav>
+    {% endif %}
+</section>
+{% endblock %}

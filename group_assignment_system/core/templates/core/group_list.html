@@ -1,0 +1,48 @@
+{% extends "core/base.html" %}
+{% block title %}{% if section == "documents" %}Documents{% elif section == "discussions" %}Discussions{% else %}Group workspaces{% endif %} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<header class="page-heading d-flex flex-wrap justify-content-between align-items-end gap-3">
+    <div>
+        <p class="text-uppercase small fw-semibold text-secondary mb-1">Collaborative workspace</p>
+        <h1 class="h2 mb-1">{% if section == "documents" %}Group documents{% elif section == "discussions" %}Group discussions{% elif request.user.is_student %}My groups{% else %}Group workspaces{% endif %}</h1>
+        <p class="mb-0">
+            {% if section == "documents" %}Choose a group to view or upload its shared documents.{% elif section == "discussions" %}Choose a group to join its discussion.{% else %}Open an authorised group workspace to access tasks, shared documents, discussions, and activity history.{% endif %}
+        </p>
+    </div>
+</header>
+
+<section class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr><th scope="col">Group</th><th scope="col">Course &amp; assignment</th><th scope="col">Leader</th><th scope="col">Members</th><th scope="col">Status</th><th scope="col">Workspace</th></tr></thead>
+            <tbody>
+                {% for group in groups %}
+                    <tr>
+                        <th scope="row"><a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a></th>
+                        <td>{{ group.assignment.course.code|default:group.assignment.course.name }}<br><span class="small text-secondary">{{ group.assignment.title }}</span></td>
+                        <td>{% if group.leader %}{{ group.leader.get_full_name|default:group.leader.username }}{% else %}<span class="text-secondary">Not assigned</span>{% endif %}</td>
+                        <td class="tabular-nums">{{ group.member_count }} / {{ group.capacity }}</td>
+                        <td><span class="badge {% if group.status == 'active' %}text-bg-success{% elif group.status == 'pending' %}text-bg-warning{% elif group.status == 'rejected' %}text-bg-danger{% else %}text-bg-secondary{% endif %}">{{ group.get_status_display }}</span></td>
+                        <td><div class="d-flex flex-wrap gap-1">
+                            <a class="btn btn-primary btn-sm" href="{% url 'group_detail' group.pk %}">Open</a>
+                            <a class="btn btn-outline-primary btn-sm" href="{% url 'group_detail' group.pk %}#documents">Files</a>
+                            <a class="btn btn-outline-primary btn-sm" href="{% url 'group_detail' group.pk %}#discussions">Discuss</a>
+                        </div></td>
+                    </tr>
+                {% empty %}
+                    <tr><td class="empty-state" colspan="6"><h2 class="h5">No group workspaces yet</h2><p class="mb-0">{% if request.user.is_student %}Join or form a group for a published assignment to see its workspace here.{% else %}Groups in your authorised course scope will appear here.{% endif %}</p></td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% if page_obj.has_other_pages %}
+    <nav class="mt-4" aria-label="Group pages">
+        <ul class="pagination">
+            {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?section={{ section }}&amp;page={{ page_obj.previous_page_number }}">Previous</a></li>{% endif %}
+            <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+            {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?section={{ section }}&amp;page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+        </ul>
+    </nav>
+{% endif %}
+{% endblock %}

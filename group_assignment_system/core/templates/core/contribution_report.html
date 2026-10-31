@@ -1,0 +1,66 @@
+{% extends "core/base.html" %}
+{% block title %}Contribution report · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h3 mb-1">Recorded contribution report</h1>
+        <p class="text-secondary mb-0">
+            Recent activity means no recorded event since {{ contribution_cutoff|date:"M j, Y" }}.
+        </p>
+    </div>
+    <a class="btn btn-outline-primary" href="?format=csv">Download CSV</a>
+</div>
+<div class="alert alert-info" role="note">
+    These records are supporting evidence only. Activity counts do not measure effort,
+    contribution quality, or academic performance.
+</div>
+{% for summary in contribution_summaries %}
+    <section class="card shadow-sm mb-3">
+        <div class="card-header">
+            <strong>{{ summary.group.name }}</strong>
+            <span class="text-secondary">· {{ summary.group.assignment.title }} · {{ summary.group.assignment.course.code }}</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Student</th>
+                        <th scope="col">Tasks assigned</th>
+                        <th scope="col">Completed</th>
+                        <th scope="col">Pending</th>
+                        <th scope="col">Files</th>
+                        <th scope="col">Messages</th>
+                        <th scope="col">Recorded activities</th>
+                        <th scope="col">Last recorded activity</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for member in summary.members %}
+                        <tr>
+                            <th scope="row">{{ member.student.get_full_name|default:member.student.username }}</th>
+                            <td>{{ member.tasks_assigned }}</td>
+                            <td>{{ member.tasks_completed }}</td>
+                            <td>{{ member.tasks_pending }}</td>
+                            <td>{{ member.files_uploaded }}</td>
+                            <td>{{ member.discussion_messages }}</td>
+                            <td>
+                                {{ member.activity_count }}
+                                {% if member.no_recent_activity %}
+                                    <span class="badge text-bg-secondary">No recorded activity in 30 days</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if member.last_activity %}{{ member.last_activity|date:"M j, Y H:i" }}{% else %}None recorded{% endif %}
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="8" class="text-secondary">No approved members.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% empty %}
+    <p class="text-secondary">No groups are available in your reporting scope.</p>
+{% endfor %}
+{% endblock %}

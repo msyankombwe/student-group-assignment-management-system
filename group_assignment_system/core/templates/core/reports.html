@@ -1,0 +1,124 @@
+{% extends "core/base.html" %}
+{% block title %}{{ title }} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h1 class="h3 mb-1">Reports &amp; analytics</h1>
+        <p class="text-secondary mb-0">{{ title }}. Results are limited to information your role is authorised to access.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{% url 'dashboard' %}">Back to dashboard</a>
+</div>
+
+<form method="get" class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label" for="report-type">Report</label>
+                <select class="form-select" id="report-type" name="type">
+                    {% for key, label in report_types %}
+                        <option value="{{ key }}" {% if report_type == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="report-course">Course</label>
+                <select class="form-select" id="report-course" name="course">
+                    <option value="">All authorised courses</option>
+                    {% for course in courses %}
+                        <option value="{{ course.pk }}" {% if selected_course == course.pk|stringformat:"s" %}selected{% endif %}>{{ course.code|default:course.name }} — {{ course.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="report-assignment">Assignment</label>
+                <select class="form-select" id="report-assignment" name="assignment">
+                    <option value="">All authorised assignments</option>
+                    {% for assignment in assignments %}
+                        <option value="{{ assignment.pk }}" {% if selected_assignment == assignment.pk|stringformat:"s" %}selected{% endif %}>{{ assignment.title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="report-group">Group</label>
+                <select class="form-select" id="report-group" name="group">
+                    <option value="">All authorised groups</option>
+                    {% for group in groups %}
+                        <option value="{{ group.pk }}" {% if selected_group == group.pk|stringformat:"s" %}selected{% endif %}>{{ group.name }} — {{ group.assignment.title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="report-semester">Semester</label>
+                <select class="form-select" id="report-semester" name="semester">
+                    <option value="">All semesters</option>
+                    {% for semester in semesters %}
+                        <option value="{{ semester.name }}" {% if selected_semester == semester.name %}selected{% endif %}>{{ semester.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="report-year">Academic year</label>
+                <select class="form-select" id="report-year" name="academic_year">
+                    <option value="">All years</option>
+                    {% for year in academic_years %}
+                        {% if year %}<option value="{{ year }}" {% if selected_year == year %}selected{% endif %}>{{ year }}</option>{% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button class="btn btn-primary w-100" type="submit">Apply filters</button>
+            </div>
+        </div>
+    </div>
+</form>
+
+<section class="card shadow-sm">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+            <h2 class="h5 mb-0">{{ title }}</h2>
+            <a class="btn btn-sm btn-outline-primary" href="?type={{ report_type }}&amp;course={{ selected_course }}&amp;assignment={{ selected_assignment }}&amp;group={{ selected_group }}&amp;semester={{ selected_semester|urlencode }}&amp;academic_year={{ selected_year|urlencode }}&amp;format=csv">Download CSV</a>
+        </div>
+        {% if report_type == "contribution" %}
+            <p class="small text-secondary">Recorded activity is supporting evidence for lecturer assessment, not an automatic measure of effort, quality, or academic performance.</p>
+        {% endif %}
+        {% if report_type == "progress" or report_type == "performance" %}
+            <div class="mb-4" style="max-width: 720px">
+                <canvas id="group-progress-chart" aria-label="Group task completion percentages" role="img"></canvas>
+                {{ chart_labels|json_script:"progress-chart-labels" }}
+                {{ chart_values|json_script:"progress-chart-values" }}
+            </div>
+        {% endif %}
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle">
+                <thead><tr>{% for header in headers %}<th scope="col">{{ header }}</th>{% endfor %}</tr></thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr>{% for cell in row %}<td>{{ cell|default:"—" }}</td>{% endfor %}</tr>
+                    {% empty %}
+                        <tr><td class="text-secondary" colspan="{{ headers|length }}">No records match the selected report and filters.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if report_type == "inactive" %}
+            <p class="small text-secondary mb-0">Groups with no recent recorded activity in the last 30 days are listed; this is a follow-up signal, not a performance judgement.</p>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+{% block extra_js %}
+{% if report_type == "progress" or report_type == "performance" %}
+<script>
+    const progressLabels = JSON.parse(document.getElementById("progress-chart-labels").textContent);
+    const progressValues = JSON.parse(document.getElementById("progress-chart-values").textContent);
+    new Chart(document.getElementById("group-progress-chart"), {
+        type: "bar",
+        data: {
+            labels: progressLabels,
+            datasets: [{ label: "Task completion (%)", data: progressValues, backgroundColor: "#0b5ed7" }]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } }
+    });
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "core/base.html" %}
+{% block title %}Notifications · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+    <h1 class="h3 mb-0">Notification history</h1>
+    {% if unread_notification_count %}
+        <form method="post">
+            {% csrf_token %}
+            <button class="btn btn-sm btn-outline-primary" type="submit" name="mark_all_read">Mark all read</button>
+        </form>
+    {% endif %}
+</div>
+<section class="card shadow-sm">
+    <div class="card-body">
+        <ul class="list-group list-group-flush">
+            {% for notification in page_obj %}
+                <li class="list-group-item d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                        <div>
+                            {% if notification.get_target_url %}
+                                <a href="{{ notification.get_target_url }}">{{ notification.message }}</a>
+                            {% else %}
+                                {{ notification.message }}
+                            {% endif %}
+                        </div>
+                        <small class="text-secondary">{{ notification.created_at|date:"M j, Y H:i" }} · {{ notification.get_notification_type_display }}{% if notification.read %} · Read{% else %} · Unread{% endif %}</small>
+                    </div>
+                    {% if not notification.read %}
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="notification_id" value="{{ notification.pk }}">
+                            <button class="btn btn-sm btn-outline-primary" type="submit">Mark read</button>
+                        </form>
+                    {% endif %}
+                </li>
+            {% empty %}
+                <li class="list-group-item text-secondary">No notifications.</li>
+            {% endfor %}
+        </ul>
+        {% if page_obj.has_other_pages %}
+            <nav aria-label="Notification history pages" class="mt-3">
+                <ul class="pagination pagination-sm mb-0">
+                    {% if page_obj.has_previous %}
+                        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a></li>
+                    {% endif %}
+                    <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+                    {% if page_obj.has_next %}
+                        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>
+                    {% endif %}
+                </ul>
+            </nav>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

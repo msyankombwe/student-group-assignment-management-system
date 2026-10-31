@@ -1,0 +1,16 @@
+{% extends "core/base.html" %}
+{% block title %}{{ title }} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<section class="card shadow-sm">
+    <div class="card-body">
+        <h1 class="h4">{{ title }}</h1>
+        {% if extra_note %}<div class="alert alert-info">{{ extra_note }}</div>{% endif %}
+        <form method="post" {% if form.is_multipart %}enctype="multipart/form-data"{% endif %}>
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button class="btn btn-primary" type="submit">Save</button>
+            <a class="btn btn-link" href="{% url 'dashboard' %}">Cancel</a>
+        </form>
+    </div>
+</section>
+{% endblock %}

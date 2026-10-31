@@ -1,0 +1,318 @@
+{% extends "core/base.html" %}
+{% block title %}Dashboard · UNILUS SGAMS{% endblock %}
+{% block content %}
+<header class="page-heading d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div>
+        <h1 class="h3 mb-1">{{ dashboard_role|title }} dashboard</h1>
+        <p class="text-secondary mb-0">Welcome, {{ request.user.get_full_name|default:request.user.username }}.</p>
+    </div>
+    {% if dashboard_role == "administrator" %}
+    <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-primary" href="{% url 'course_create' %}">New course</a>
+        <a class="btn btn-outline-primary" href="{% url 'assignment_create' %}">New assignment</a>
+        <a class="btn btn-outline-primary" href="{% url 'group_create' %}">New group</a>
+        <a class="btn btn-outline-secondary" href="{% url 'contribution_report' %}">Contribution report</a>
+        <a class="btn btn-outline-secondary" href="{% url 'reports' %}">Reports &amp; analytics</a>
+    </div>
+    {% elif dashboard_role == "lecturer" %}
+    <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-primary" href="{% url 'assignment_create' %}">New assignment</a>
+        <a class="btn btn-outline-primary" href="{% url 'group_create' %}">New group</a>
+        <a class="btn btn-outline-secondary" href="{% url 'contribution_report' %}">Contribution report</a>
+        <a class="btn btn-outline-secondary" href="{% url 'reports' %}">Reports &amp; analytics</a>
+    </div>
+    {% endif %}
+</header>
+
+<div class="row g-3 mb-4">
+    {% if request.user.role == 'admin' or request.user.is_superuser %}
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Students</div><div class="stat-value">{{ stats.users_by_role.students }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Lecturers</div><div class="stat-value">{{ stats.users_by_role.lecturers }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Courses</div><div class="stat-value">{{ stats.courses }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Assignments</div><div class="stat-value">{{ stats.assignments }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Groups</div><div class="stat-value">{{ stats.groups }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Submissions</div><div class="stat-value">{{ stats.submissions }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Active users</div><div class="stat-value">{{ stats.active_users }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Activities (30 days)</div><div class="stat-value">{{ stats.recent_activities }}</div></div></div></div>
+    {% elif request.user.role == 'lecturer' %}
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Courses</div><div class="stat-value">{{ stats.courses }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Assignments</div><div class="stat-value">{{ stats.assignments }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Groups</div><div class="stat-value">{{ stats.groups }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Submissions</div><div class="stat-value">{{ stats.submissions }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Incomplete groups</div><div class="stat-value">{{ stats.incomplete_groups }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Groups with overdue tasks</div><div class="stat-value">{{ stats.overdue_groups }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Outstanding submissions</div><div class="stat-value">{{ stats.outstanding_submissions }}</div></div></div></div>
+    {% else %}
+        <div class="col-6 col-lg-4"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Enrolled courses</div><div class="stat-value">{{ stats.courses }}</div></div></div></div>
+        <div class="col-6 col-lg-4"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Active assignments</div><div class="stat-value">{{ stats.active_assignments }}</div></div></div></div>
+        <div class="col-12 col-lg-4"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">My groups</div><div class="stat-value">{{ stats.groups }}</div></div></div></div>
+    {% endif %}
+</div>
+
+<section class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-4" aria-label="Task summary">
+    <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Total tasks</div><div class="fs-4">{{ task_metrics.total }}</div></div></div></div>
+    <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Completed</div><div class="fs-4">{{ task_metrics.completed }}</div></div></div></div>
+    <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Pending</div><div class="fs-4">{{ task_metrics.pending }}</div></div></div></div>
+    <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Overdue</div><div class="fs-4 text-danger">{{ task_metrics.overdue }}</div></div></div></div>
+    {% if dashboard_role == "student" %}
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Assigned to me</div><div class="fs-4">{{ task_metrics.assigned_to_me }}</div></div></div></div>
+    {% endif %}
+</section>
+
+{% if dashboard_role == "lecturer" or dashboard_role == "administrator" %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5">Reports and analytics</h2>
+        <div class="d-flex flex-wrap gap-2">
+            {% for report_key, report_label in report_types %}
+                {% if dashboard_role != "lecturer" or report_key != "admin_activity" %}
+                    <a class="btn btn-sm btn-outline-primary" href="{% url 'reports' %}?type={{ report_key }}">{{ report_label }}</a>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endif %}
+
+{% if dashboard_role == "student" and student_contribution_summary %}
+<section class="card shadow-sm mb-4" id="contributions">
+    <div class="card-body">
+        <h2 class="h5">My recorded contributions</h2>
+        <div class="row row-cols-2 row-cols-md-5 g-3">
+            <div class="col"><div class="border rounded p-2"><div class="text-secondary">Tasks assigned</div><strong>{{ student_contribution_summary.tasks_assigned }}</strong></div></div>
+            <div class="col"><div class="border rounded p-2"><div class="text-secondary">Tasks completed</div><strong>{{ student_contribution_summary.tasks_completed }}</strong></div></div>
+            <div class="col"><div class="border rounded p-2"><div class="text-secondary">Tasks pending</div><strong>{{ student_contribution_summary.tasks_pending }}</strong></div></div>
+            <div class="col"><div class="border rounded p-2"><div class="text-secondary">Files uploaded</div><strong>{{ student_contribution_summary.files_uploaded }}</strong></div></div>
+            <div class="col"><div class="border rounded p-2"><div class="text-secondary">Discussion messages</div><strong>{{ student_contribution_summary.discussion_messages }}</strong></div></div>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <section class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Courses &amp; assignments</h2>
+                {% for course in courses %}
+                    <h3 class="h6 mt-3">
+                        <a href="{% url 'course_detail' course.pk %}">{{ course.code|default:course.name }}</a>
+                        · {{ course.semester }} {{ course.academic_year }}
+                    </h3>
+                    <ul class="list-unstyled ms-1">
+                        {% for assignment in course.assignments.all %}
+                            <li class="mb-2">
+                                <a href="{% url 'assignment_detail' assignment.pk %}"><strong>{{ assignment.title }}</strong></a>
+                                <span class="badge text-bg-secondary badge-status">{{ assignment.get_status_display }}</span>
+                                — due {{ assignment.deadline|date:"M j, Y H:i" }}
+                                <ul>
+                                    {% if dashboard_role != "student" %}
+                                        {% for group in assignment.groups.all %}
+                                            <li><a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a></li>
+                                        {% empty %}<li class="text-secondary">No groups yet.</li>{% endfor %}
+                                    {% endif %}
+                                </ul>
+                            </li>
+                        {% empty %}<li class="text-secondary">No assignments yet.</li>{% endfor %}
+                    </ul>
+                {% empty %}
+                    <p class="text-secondary mb-0">No courses available yet.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+    <div class="col-lg-5">
+        <section class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Tasks</h2>
+                <ul class="list-group list-group-flush">
+                    {% for task in tasks %}
+                        <li class="list-group-item px-0">
+                            <a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a>
+                            <div class="small text-secondary">
+                                <span class="badge {% if task.is_overdue %}text-bg-danger{% elif task.status == 'completed' %}text-bg-success{% elif task.status == 'under_review' %}text-bg-info{% elif task.status == 'in_progress' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ task.effective_status_display }}</span>
+                                · {{ task.group.name }} · {{ task.assigned_to.get_full_name|default:task.assigned_to.username }}
+                                · {{ task.get_priority_display }} priority · due {{ task.deadline|date:"M j, Y H:i" }}
+                            </div>
+                        </li>
+                    {% empty %}
+                        <li class="list-group-item px-0 text-secondary">No tasks assigned or available.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </section>
+        <section class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Overdue tasks</h2>
+                <ul class="mb-0">
+                    {% for task in overdue_tasks %}
+                        <li>
+                            <a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:65 }}</a>
+                            · {{ task.group.name }} · assigned to {{ task.assigned_to.get_full_name|default:task.assigned_to.username }}
+                            · due {{ task.deadline|date:"M j, Y H:i" }}
+                        </li>
+                    {% empty %}<li class="text-secondary">No overdue tasks.</li>{% endfor %}
+                </ul>
+            </div>
+        </section>
+        <section class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Upcoming internal deadlines</h2>
+                <ul class="list-group list-group-flush">
+                    {% for task in upcoming_tasks %}
+                        <li class="list-group-item px-0">
+                            <a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:65 }}</a>
+                            <div class="small text-secondary">{{ task.group.name }} · {{ task.deadline|date:"M j, Y H:i" }}</div>
+                        </li>
+                    {% empty %}<li class="list-group-item px-0 text-secondary">No upcoming internal deadlines.</li>{% endfor %}
+                </ul>
+            </div>
+        </section>
+        {% if dashboard_role == "lecturer" %}
+            <section class="card shadow-sm mb-3">
+                <div class="card-body">
+                    <h2 class="h5">Groups with overdue tasks</h2>
+                    <ul class="mb-0">
+                        {% for group in delayed_groups %}
+                            <li><a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a> · {{ group.assignment.title }}</li>
+                        {% empty %}<li class="text-secondary">No managed groups have overdue tasks.</li>{% endfor %}
+                    </ul>
+                </div>
+            </section>
+        {% endif %}
+        <section class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Unread notifications</h2>
+                <ul class="mb-2">
+                    {% for notification in notifications %}
+                        <li>{{ notification.message }} <span class="text-secondary">({{ notification.created_at|date:"M j, H:i" }})</span></li>
+                    {% empty %}<li class="text-secondary">You're all caught up.</li>{% endfor %}
+                </ul>
+                <a href="{% url 'notifications' %}">View all notifications</a>
+            </div>
+        </section>
+    </div>
+</div>
+
+<section class="card shadow-sm mt-3">
+    <div class="card-body">
+        <h2 class="h5">{% if dashboard_role == "student" %}My groups{% else %}Groups and formation status{% endif %}</h2>
+        <div class="row g-3">
+            {% for group in groups %}
+                <div class="col-md-6">
+                    <article class="border rounded p-3 h-100">
+                        <div class="d-flex justify-content-between gap-2">
+                            <a href="{% url 'group_detail' group.pk %}"><strong>{{ group.name }}</strong></a>
+                            <span class="badge {% if group.status == 'active' %}text-bg-success{% elif group.status == 'pending' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ group.get_status_display }}</span>
+                        </div>
+                        <div class="small text-secondary mb-2">{{ group.assignment.title }}</div>
+                        <div>Leader: {% if group.leader %}{{ group.leader.get_full_name|default:group.leader.username }}{% else %}Not assigned{% endif %}</div>
+                        <div>{{ group.member_count }} / {{ group.capacity }} members</div>
+                        <div class="small mt-2">Members:
+                            {% for membership in group.memberships.all %}
+                                {% if membership.status == 'approved' %}{{ membership.student.get_full_name|default:membership.student.username }}{% if not forloop.last %}, {% endif %}{% endif %}
+                            {% empty %}None{% endfor %}
+                        </div>
+                        <div class="progress mt-2" role="progressbar" aria-label="Group task progress" aria-valuenow="{{ group.task_completion_percent }}" aria-valuemin="0" aria-valuemax="100">
+                            <div class="progress-bar" style="width: {{ group.task_completion_percent }}%">{{ group.task_completion_percent }}%</div>
+                        </div>
+                    </article>
+                </div>
+            {% empty %}<p class="text-secondary mb-0">No groups are available.</p>{% endfor %}
+        </div>
+    </div>
+</section>
+
+{% if dashboard_role == "student" and group_requests %}
+<section class="card shadow-sm mt-3">
+    <div class="card-body">
+        <h2 class="h5">Group proposals and requests awaiting approval</h2>
+        <ul class="mb-0">
+            {% for membership in group_requests %}
+                <li>
+                    {% if membership.status == 'invited' or membership.group.status == 'pending' %}
+                        <a href="{% url 'group_detail' membership.group_id %}">{{ membership.group.name }}</a>
+                    {% else %}
+                        <a href="{% url 'assignment_detail' membership.assignment_id %}">{{ membership.group.name }}</a>
+                    {% endif %}
+                    · {{ membership.group.assignment.title }}
+                    · {{ membership.get_status_display }}
+                    {% if membership.group.status == 'pending' %} (group proposal awaiting review){% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+</section>
+{% endif %}
+
+<section class="card shadow-sm mt-3">
+    <div class="card-body">
+        <h2 class="h5">Submissions</h2>
+        <ul class="mb-0">
+            {% for submission in submissions %}
+                <li>
+                    <a href="{% url 'submission_receipt' submission.pk %}">{{ submission.assignment.title }} · {{ submission.group.name }}</a>
+                    — <span class="badge {% if submission.status == 'feedback_published' %}text-bg-success{% elif submission.is_late %}text-bg-warning{% elif submission.status == 'under_review' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ submission.get_status_display }}</span>
+                    · {{ submission.submitted_at|date:"M j, Y H:i" }}
+                    {% if submission.is_late %}<span class="badge text-bg-warning">Late</span>{% endif %}
+                </li>
+            {% empty %}<li class="text-secondary">No submissions yet.</li>{% endfor %}
+        </ul>
+        <a href="{% url 'submission_list' %}">View submission history</a>
+    </div>
+</section>
+
+<section class="card shadow-sm mt-3">
+    <div class="card-body">
+        <h2 class="h5">Contribution activity</h2>
+        <ul class="mb-0">
+            {% for activity in contribution_activities %}
+                <li>
+                    {% if dashboard_role != "student" %}{{ activity.student.get_full_name|default:activity.student.username }}: {% endif %}
+                    {{ activity.description }}
+                    {% if activity.assignment %} · {{ activity.assignment.title }}{% endif %}
+                    <span class="text-secondary">— {{ activity.occurred_at|date:"M j, Y H:i" }}</span>
+                </li>
+            {% empty %}<li class="text-secondary">No contribution activity recorded.</li>{% endfor %}
+        </ul>
+    </div>
+</section>
+
+{% if dashboard_role == "lecturer" %}
+<section class="card shadow-sm mt-3">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+            <div>
+                <h2 class="h5 mb-1">Contribution overview</h2>
+                <p class="small text-secondary mb-0">No recorded activity in the last 30 days is an indicator for follow-up, not a performance judgment.</p>
+            </div>
+            <a href="{% url 'contribution_report' %}">Full report</a>
+        </div>
+        {% for summary in contribution_summaries %}
+            <h3 class="h6 mt-3">{{ summary.group.name }} · {{ summary.group.assignment.title }}</h3>
+            <div class="d-flex justify-content-between small">
+                <span>Group task progress</span>
+                <span>{{ summary.task_completed }}/{{ summary.task_total }} · {{ summary.completion_percent }}%</span>
+            </div>
+            <div class="progress progress-thin mb-2" role="progressbar" aria-label="Group task completion" aria-valuenow="{{ summary.completion_percent }}" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" style="width: {{ summary.completion_percent }}%"></div>
+            </div>
+            <ul class="mb-0">
+                {% for member in summary.members %}
+                    <li>
+                        {{ member.student.get_full_name|default:member.student.username }}:
+                        {{ member.tasks_completed }}/{{ member.tasks_assigned }} tasks completed,
+                        {{ member.files_uploaded }} files, {{ member.discussion_messages }} messages
+                        {% if member.no_recent_activity %}<span class="text-secondary">(no recorded activity in 30 days)</span>{% endif %}
+                    </li>
+                {% empty %}<li class="text-secondary">No approved group members.</li>{% endfor %}
+            </ul>
+        {% empty %}<p class="text-secondary mt-3 mb-0">No managed groups yet.</p>{% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<p class="small text-secondary mt-3 mb-0">
+    Activity and task counts are recorded system actions. They do not perfectly measure effort or work quality outside the system.
+</p>
+{% endblock %}

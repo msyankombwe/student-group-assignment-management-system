@@ -1,0 +1,18 @@
+{% extends "core/base.html" %}
+{% block title %}Profile · UNILUS SGAMS{% endblock %}
+{% block content %}
+<section class="card shadow-sm">
+    <div class="card-body">
+        <h1 class="h4">My profile</h1>
+        <dl class="row mb-0">
+            <dt class="col-sm-3">Username</dt><dd class="col-sm-9">{{ profile_user.username }}</dd>
+            <dt class="col-sm-3">Name</dt><dd class="col-sm-9">{{ profile_user.get_full_name|default:"—" }}</dd>
+            <dt class="col-sm-3">Email</dt><dd class="col-sm-9">{{ profile_user.email|default:"—" }}</dd>
+            <dt class="col-sm-3">Role</dt><dd class="col-sm-9">{{ profile_user.get_role_display }}</dd>
+            <dt class="col-sm-3">Student number</dt><dd class="col-sm-9">{{ profile_user.student_number|default:"—" }}</dd>
+            <dt class="col-sm-3">Programme</dt><dd class="col-sm-9">{{ profile_user.programme|default:"—" }}</dd>
+        </dl>
+        <p class="small text-secondary mt-3 mb-0">Roles cannot be changed by students through this interface.</p>
+    </div>
+</section>
+{% endblock %}

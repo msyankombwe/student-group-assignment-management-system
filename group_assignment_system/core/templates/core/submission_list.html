@@ -1,0 +1,103 @@
+{% extends "core/base.html" %}
+{% block title %}Submissions · UNILUS SGAMS{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">{% if is_lecturer_view %}Assignment submissions{% else %}My submission history{% endif %}</h1>
+{% if is_lecturer_view %}
+    <form method="get" class="card card-body shadow-sm mb-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-5">
+                <label class="form-label" for="course-filter">Course</label>
+                <select class="form-select" id="course-filter" name="course">
+                    <option value="">All authorised courses</option>
+                    {% for course in courses %}
+                        <option value="{{ course.pk }}" {% if selected_course == course.pk|stringformat:"s" %}selected{% endif %}>{{ course.code|default:course.name }} · {{ course.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label" for="assignment-filter">Assignment</label>
+                <select class="form-select" id="assignment-filter" name="assignment">
+                    <option value="">All submissions</option>
+                    {% for assignment in assignment_options %}
+                        <option value="{{ assignment.pk }}" {% if selected_assignment == assignment.pk|stringformat:"s" %}selected{% endif %}>{{ assignment.title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2"><button class="btn btn-primary w-100" type="submit">Filter</button></div>
+        </div>
+    </form>
+{% endif %}
+<div class="alert alert-info">
+    SGAMS records submission evidence and workflow status. It does not submit work to Moodle or synchronize official Moodle grades.
+</div>
+<section class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    {% if is_lecturer_view %}<th scope="col">Student</th>{% endif %}
+                    <th scope="col">Course / Assignment</th>
+                    <th scope="col">Group</th>
+                    <th scope="col">Submitted</th>
+                    <th scope="col">Status</th>
+                    {% if is_lecturer_view %}<th scope="col">Assessment</th>{% endif %}
+                    <th scope="col">Receipt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for submission in submissions %}
+                    <tr>
+                        {% if is_lecturer_view %}
+                            <td>{{ submission.submitted_by.get_full_name|default:submission.submitted_by.username }}</td>
+                        {% endif %}
+                        <td>{{ submission.assignment.course.code|default:submission.assignment.course.name }}<br><strong>{{ submission.assignment.title }}</strong></td>
+                        <td>{{ submission.group.name }}</td>
+                        <td>{{ submission.submitted_at|date:"M j, Y H:i:s" }}{% if submission.is_late %}<br><span class="badge text-bg-warning">Late</span>{% endif %}</td>
+                        <td>
+                            <span class="badge {% if submission.status == 'feedback_published' %}text-bg-success{% elif submission.is_late %}text-bg-warning{% elif submission.status == 'under_review' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ submission.get_status_display }}</span>
+                            {% if not submission.is_latest %}<br><small class="text-secondary">Previous version</small>{% endif %}
+                        </td>
+                        {% if is_lecturer_view %}
+                            <td>
+                                {% if submission.grade %}
+                                    {{ submission.grade.score }}/{{ submission.grade.max_score }}
+                                    {% if submission.grade.is_released %}<span class="badge text-bg-success">Published</span>{% else %}<span class="badge text-bg-secondary">Private</span>{% endif %}
+                                {% else %}Not assessed{% endif %}
+                            </td>
+                        {% endif %}
+                        <td><a href="{% url 'submission_receipt' submission.pk %}">View receipt</a></td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="{% if is_lecturer_view %}7{% else %}5{% endif %}" class="text-secondary p-3">No submissions found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if page_obj.has_other_pages %}
+        <nav class="p-3" aria-label="Submission pages">
+            <ul class="pagination pagination-sm mb-0">
+                {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}&course={{ selected_course }}&assignment={{ selected_assignment }}">Previous</a></li>{% endif %}
+                <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+                {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}&course={{ selected_course }}&assignment={{ selected_assignment }}">Next</a></li>{% endif %}
+            </ul>
+        </nav>
+    {% endif %}
+</section>
+{% if pending_groups %}
+    <section class="card shadow-sm mt-3">
+        <div class="card-body">
+            <h2 class="h5">Not submitted</h2>
+            <ul class="mb-0">
+                {% for group in pending_groups %}
+                    <li>
+                        <a href="{% url 'group_detail' group.pk %}">{{ group.assignment.title }} · {{ group.name }}</a>
+                        · {{ group.assignment.course.code|default:group.assignment.course.name }}
+                        · deadline {{ group.assignment.deadline|date:"M j, Y H:i" }}
+                        · Not Submitted
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+{% endif %}
+{% endblock %}

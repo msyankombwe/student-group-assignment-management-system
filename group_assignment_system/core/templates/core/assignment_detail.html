@@ -1,0 +1,154 @@
+{% extends "core/base.html" %}
+{% block title %}{{ assignment.title }} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-4">
+    <div>
+        <p class="text-secondary mb-1">
+            <a href="{% url 'assignment_list' %}">Assignments</a> ·
+            <a href="{% url 'course_detail' assignment.course_id %}">{{ assignment.course.code|default:assignment.course.name }}</a>
+        </p>
+        <h1 class="h3 mb-2">{{ assignment.title }}</h1>
+        <span class="badge {% if assignment.status == 'published' %}text-bg-success{% elif assignment.status == 'closed' %}text-bg-secondary{% else %}text-bg-warning{% endif %}">
+            {{ assignment.get_status_display }}
+        </span>
+    </div>
+    {% if can_manage %}
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary" href="{% url 'assignment_group_create' assignment.pk %}">Create group</a>
+            <a class="btn btn-primary" href="{% url 'assignment_edit' assignment.pk %}">Edit / manage</a>
+            {% if assignment.peer_evaluation_enabled %}
+                <a class="btn btn-outline-secondary" href="{% url 'peer_evaluation_report' assignment.pk %}">Peer evaluation report</a>
+            {% endif %}
+        </div>
+    {% endif %}
+</div>
+<div class="row g-3">
+    <div class="col-lg-8">
+        <section class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Instructions</h2>
+                <div>{{ assignment.description|linebreaks }}</div>
+                <h2 class="h5 mt-4">Objectives</h2>
+                <div>{{ assignment.objectives|linebreaks }}</div>
+                {% if assignment.moodle_reference %}
+                    <p class="small mt-3 mb-0">
+                        Moodle reference (external): <a href="{{ assignment.moodle_reference }}" target="_blank" rel="noopener noreferrer">{{ assignment.moodle_reference }}</a>
+                    </p>
+                {% endif %}
+                {% if assignment.peer_evaluation_enabled %}
+                    <section class="alert alert-info mt-3 mb-0">
+                        <h2 class="h6">Peer evaluation criteria</h2>
+                        <p class="small">Evaluations are confidential and support lecturer judgement; they do not automatically determine grades.</p>
+                        <ul class="mb-0">
+                            {% for criterion, label in assignment.PEER_EVALUATION_CRITERIA %}
+                                {% if criterion in assignment.peer_evaluation_criteria %}<li>{{ label }}</li>{% endif %}
+                            {% endfor %}
+                        </ul>
+                    </section>
+                {% endif %}
+            </div>
+        </section>
+        <section class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Group formation and progress</h2>
+                {% if can_manage %}
+                    <div class="table-responsive">
+                        <table class="table align-middle mb-0">
+                            <thead><tr><th>Group</th><th>Members</th><th>Leader</th><th>Progress</th><th>Status</th></tr></thead>
+                            <tbody>
+                                {% for group in groups %}
+                                    <tr>
+                                        <td><a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a></td>
+                                        <td>{{ group.member_count }}/{{ group.capacity }}</td>
+                                        <td>{% if group.leader %}{{ group.leader.get_full_name|default:group.leader.username }}{% else %}Not assigned{% endif %}</td>
+                                        <td>
+                                            <div class="progress" role="progressbar" aria-label="Task completion" aria-valuenow="{{ group.task_completion_percent }}" aria-valuemin="0" aria-valuemax="100">
+                                                <div class="progress-bar" style="width: {{ group.task_completion_percent }}%">{{ group.task_completion_percent }}%</div>
+                                            </div>
+                                        </td>
+                                        <td>{{ group.get_status_display }}</td>
+                                    </tr>
+                                {% empty %}
+                                    <tr><td colspan="5" class="text-secondary">No groups have been formed.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    {% for membership in own_memberships %}
+                        <p class="mb-1">
+                            Group:
+                            <strong>
+                                {% if membership.status == 'approved' or membership.status == 'invited' or membership.group.status == 'pending' %}
+                                    <a href="{% url 'group_detail' membership.group_id %}">{{ membership.group.name }}</a>
+                                {% else %}
+                                    {{ membership.group.name }}
+                                {% endif %}
+                            </strong>
+                            · membership {{ membership.get_status_display|lower }}
+                            · group {{ membership.group.get_status_display|lower }}
+                        </p>
+                        {% if membership.status == 'approved' %}
+                            <div class="progress mb-2" role="progressbar" aria-label="Task completion" aria-valuenow="{{ membership.group.task_completion_percent }}" aria-valuemin="0" aria-valuemax="100">
+                                <div class="progress-bar" style="width: {{ membership.group.task_completion_percent }}%">
+                                    {{ membership.group.task_completion_percent }}% complete
+                                </div>
+                            </div>
+                            <a href="{% url 'group_detail' membership.group_id %}">Open my group</a>
+                        {% endif %}
+                    {% empty %}
+                        <p class="mb-0 text-secondary">
+                            {% if assignment.allow_student_group_proposals %}
+                                You are not in a group yet. Student group formation is enabled.
+                            {% else %}
+                                You are not in a group yet. Contact your lecturer about group allocation.
+                            {% endif %}
+                        </p>
+                    {% endfor %}
+                    {% if can_propose_group %}
+                        <hr>
+                        <h3 class="h6">Propose a group</h3>
+                        <p class="small text-secondary">Your proposal and membership requests require lecturer approval. You can optionally invite enrolled classmates.</p>
+                        <form method="post">
+                            {% csrf_token %}
+                            {{ proposal_form.as_p }}
+                            <button class="btn btn-primary btn-sm" type="submit" name="propose_group" value="1">Submit group proposal</button>
+                        </form>
+                    {% endif %}
+                    {% if available_groups and not existing_membership %}
+                        <hr>
+                        <h3 class="h6">Request to join a group</h3>
+                        <ul class="list-group">
+                            {% for group in available_groups %}
+                                <li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                    <span>{{ group.name }} <small class="text-secondary">· {{ group.member_count }}/{{ group.capacity }} members</small></span>
+                                    <form method="post">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="group_id" value="{{ group.pk }}">
+                                        <button class="btn btn-sm btn-outline-primary" type="submit" name="request_join" value="1">Request to join</button>
+                                    </form>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                {% endif %}
+            </div>
+        </section>
+    </div>
+    <div class="col-lg-4">
+        <section class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Key dates and group rules</h2>
+                <dl class="mb-0">
+                    <dt>Course</dt><dd><a href="{% url 'course_detail' assignment.course_id %}">{{ assignment.course.name }}</a></dd>
+                    <dt>Published</dt><dd>{{ assignment.published_at|date:"M j, Y H:i"|default:"Not published" }}</dd>
+                    <dt>Submission deadline</dt><dd>{{ assignment.deadline|date:"M j, Y H:i" }}</dd>
+                    <dt>Permitted group size</dt><dd>{{ assignment.min_group_size }}–{{ assignment.max_group_size }} students</dd>
+                    <dt>Student group proposals</dt>
+                    <dd>{% if assignment.allow_student_group_proposals %}Allowed{% else %}Not allowed{% endif %}</dd>
+                </dl>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

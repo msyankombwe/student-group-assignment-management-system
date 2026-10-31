@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Log in · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <section class="card shadow-sm">
+            <div class="card-body">
+                <h1 class="h4 mb-3">Log in</h1>
+                {% if form.errors %}<div class="alert alert-danger" role="alert">Username or password was not accepted.</div>{% endif %}
+                <form method="post">
+                    {% csrf_token %}
+                    {{ form.as_p }}
+                    <button class="btn btn-primary w-100" type="submit">Log in</button>
+                </form>
+                <p class="small mt-3 mb-0"><a href="{% url 'password_reset' %}">Forgot your password?</a></p>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,95 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b2a4a">
+    <title>{% block title %}UNILUS Group Assignment System{% endblock %}</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{% static 'core/sgams.css' %}" rel="stylesheet">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+<nav class="navbar navbar-expand-xxl navbar-dark mb-4" aria-label="Main navigation">
+    <div class="container">
+        <a class="navbar-brand fw-semibold" href="{% url 'dashboard' %}" translate="no">UNILUS SGAMS</a>
+        {% if request.user.is_authenticated %}
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle main navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="mainNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}" {% if request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>Dashboard</a></li>
+                    {% if request.user.is_student %}
+                        <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}">Courses</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}">Assignments</a></li>
+                        <li class="nav-item dropdown">
+                            <button class="nav-link dropdown-toggle" type="button" id="workspaceMenu" data-bs-toggle="dropdown" aria-expanded="false">Group workspace</button>
+                            <ul class="dropdown-menu" aria-labelledby="workspaceMenu">
+                                <li><a class="dropdown-item" href="{% url 'group_list' %}">My groups</a></li>
+                                <li><a class="dropdown-item" href="{% url 'task_list' %}">Tasks</a></li>
+                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=documents">Documents</a></li>
+                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=discussions">Discussions</a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}#contributions">Contributions</a></li>
+                    {% elif request.user.is_lecturer %}
+                        <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}">My courses</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}">Assignments</a></li>
+                        <li class="nav-item dropdown">
+                            <button class="nav-link dropdown-toggle" type="button" id="lecturerWorkspaceMenu" data-bs-toggle="dropdown" aria-expanded="false">Groups</button>
+                            <ul class="dropdown-menu" aria-labelledby="lecturerWorkspaceMenu">
+                                <li><a class="dropdown-item" href="{% url 'group_list' %}">Group workspaces</a></li>
+                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=documents">Documents</a></li>
+                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=discussions">Discussions</a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=progress">Progress</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'submission_list' %}">Submissions &amp; feedback</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}">Reports</a></li>
+                    {% elif request.user.is_admin_role or request.user.is_superuser %}
+                        <li class="nav-item"><a class="nav-link" href="{% url 'admin:index' %}">Users &amp; administration</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}">Courses</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'academic_calendar' %}">Academic sessions</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=admin_activity">Activity logs</a></li>
+                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}">Reports</a></li>
+                    {% endif %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'notifications' %}">
+                            Notifications
+                            {% if unread_notification_count %}<span class="badge rounded-pill text-bg-warning">{{ unread_notification_count }}</span>{% endif %}
+                        </a>
+                    </li>
+                    <li class="nav-item"><a class="nav-link" href="{% url 'profile' %}">Profile</a></li>
+                </ul>
+                <span class="navbar-text text-white-50 me-lg-3">{{ request.user.username }} ({{ request.user.get_role_display }})</span>
+                <form method="post" action="{% url 'logout' %}" class="d-inline-block my-2 my-lg-0">
+                    {% csrf_token %}
+                    <button class="btn btn-outline-light btn-sm" type="submit">Log out</button>
+                </form>
+            </div>
+        {% endif %}
+    </div>
+</nav>
+
+<main class="container app-main pb-5" id="main-content" tabindex="-1">
+    {% for message in messages %}
+        <div class="alert {% if message.tags == 'error' %}alert-danger{% elif message.tags == 'success' %}alert-success{% elif message.tags == 'warning' %}alert-warning{% else %}alert-info{% endif %} alert-dismissible fade show" role="{% if message.tags == 'error' %}alert{% else %}status{% endif %}" aria-live="{% if message.tags == 'error' %}assertive{% else %}polite{% endif %}">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Dismiss message"></button>
+        </div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+</main>
+
+<footer class="container pb-4">
+    <small>University of Lusaka · Student Group Assignment Management System (complements Moodle; it is not an LMS replacement).</small>
+</footer>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

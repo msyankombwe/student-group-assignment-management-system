@@ -1,0 +1,51 @@
+{% extends "core/base.html" %}
+{% block title %}Peer evaluation report · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+        <p class="text-secondary mb-1"><a href="{% url 'assignment_detail' assignment.pk %}">{{ assignment.title }}</a></p>
+        <h1 class="h3 mb-1">Confidential peer evaluation summary</h1>
+        <p class="text-secondary mb-0">{{ evaluation_count }} evaluation(s) received.</p>
+    </div>
+</div>
+<div class="alert alert-warning">
+    These evaluations are confidential supporting information for lecturer judgement. Scores do not automatically determine academic grades. Consider comments, context, and other assessment evidence before making decisions.
+</div>
+{% for summary in summaries %}
+    <section class="card shadow-sm mb-3">
+        <div class="card-header d-flex flex-wrap justify-content-between gap-2">
+            <strong>{{ summary.student.get_full_name|default:summary.student.username }}</strong>
+            <span class="text-secondary">
+                {% if summary.group %}{{ summary.group.group.name }} · {% endif %}
+                {{ summary.reviews|length }} evaluation(s)
+            </span>
+        </div>
+        <div class="card-body">
+            <h2 class="h6">Criteria summary</h2>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead><tr><th scope="col">Criterion</th><th scope="col">Average</th><th scope="col">Responses</th></tr></thead>
+                    <tbody>
+                        {% for criterion in summary.criteria %}
+                            <tr><th scope="row">{{ criterion.label }}</th><td>{{ criterion.average|floatformat:1 }}/10</td><td>{{ criterion.count }}</td></tr>
+                        {% empty %}
+                            <tr><td colspan="3" class="text-secondary">No criterion-level scores were recorded for these legacy evaluations.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <h2 class="h6 mt-3">Confidential comments</h2>
+            <ul class="mb-0">
+                {% for review in summary.reviews %}
+                    <li class="mb-2">
+                        {{ review.comment|linebreaksbr }}
+                        <small class="text-secondary">— {{ review.created_at|date:"M j, Y H:i" }}</small>
+                    </li>
+                {% empty %}<li class="text-secondary">No comments.</li>{% endfor %}
+            </ul>
+        </div>
+    </section>
+{% empty %}
+    <p class="text-secondary">No peer evaluations have been submitted for this assignment.</p>
+{% endfor %}
+{% endblock %}

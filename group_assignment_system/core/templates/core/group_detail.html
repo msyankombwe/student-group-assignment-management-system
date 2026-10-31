@@ -1,0 +1,325 @@
+{% extends "core/base.html" %}
+{% block title %}{{ group.name }} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div id="overview" class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+        <p class="text-secondary mb-1">
+            <a href="{% url 'assignment_detail' group.assignment_id %}">{{ group.assignment.title }}</a>
+            · {{ group.assignment.course.code|default:group.assignment.course.name }}
+        </p>
+        <h1 class="h3">{{ group.name }}</h1>
+        <p class="text-secondary mb-1">{{ group.assignment.title }} · {{ group.assignment.course.name }}</p>
+        <span class="badge {% if group.status == 'active' %}text-bg-success{% elif group.status == 'pending' %}text-bg-warning{% elif group.status == 'rejected' %}text-bg-danger{% else %}text-bg-secondary{% endif %}">
+            {{ group.get_status_display }}
+        </span>
+        <span class="badge text-bg-light">{{ group.get_formation_type_display }}</span>
+        {% if group.description %}<p>{{ group.description }}</p>{% endif %}
+        {% if can_view_private %}
+            <div class="progress progress-thin mb-1" role="progressbar" aria-label="Task completion" aria-valuenow="{{ progress_percent }}" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" style="width: {{ progress_percent }}%">{{ progress_percent }}%</div>
+            </div>
+            <small class="text-secondary">Task completion based on recorded task statuses.</small>
+        {% endif %}
+    </div>
+    <div class="btn-group">
+        {% if can_manage or can_view_private %}
+            <a class="btn btn-primary" href="{% url 'task_create' group.pk %}">Create task</a>
+        {% endif %}
+        {% if request.user.role == "student" and can_view_private %}
+            <a class="btn btn-outline-primary" href="{% url 'peer_review_create' group.assignment_id %}">Peer review</a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    {% if can_view_private %}
+        <div class="col-sm-6 col-lg-3"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Members</div><strong>{{ group.member_count }} / {{ group.capacity }}</strong></div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Group leader</div><strong>{% if group.leader %}{{ group.leader.get_full_name|default:group.leader.username }}{% else %}Not assigned{% endif %}</strong></div></div></div>
+    {% endif %}
+    <div class="col-sm-6 col-lg-3"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Group status</div><strong>{{ group.get_status_display }}</strong></div></div></div>
+    {% if can_view_private %}
+        <div class="col-sm-6 col-lg-3"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Task progress</div><strong>{{ progress_percent }}%</strong></div></div></div>
+    {% endif %}
+</div>
+
+{% if can_view_private %}
+    <nav class="nav nav-pills flex-wrap gap-2 mb-3" aria-label="Group workspace sections">
+        <a class="nav-link" href="#overview">Overview</a>
+        <a class="nav-link" href="#tasks">Tasks</a>
+        <a class="nav-link" href="#documents">Documents</a>
+        <a class="nav-link" href="#discussions">Discussions</a>
+        <a class="nav-link" href="#members">Members</a>
+        <a class="nav-link" href="#activity-history">Activity History</a>
+    </nav>
+{% endif %}
+
+{% if can_manage_group %}
+    {% if group.status == 'pending' %}
+        <div class="card border-warning shadow-sm mb-3">
+            <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <div><h2 class="h5 mb-1">Review student group proposal</h2><p class="mb-0 text-secondary">Approving activates the group and approves its pending proposer/members.</p></div>
+                <div class="d-flex gap-2">
+                    <form method="post">{% csrf_token %}<button class="btn btn-success" name="approve_group" value="1">Approve group</button></form>
+                    <form method="post">{% csrf_token %}<button class="btn btn-outline-danger" name="reject_group" value="1">Reject proposal</button></form>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    <section class="card shadow-sm mb-3">
+        <div class="card-body">
+            <h2 class="h5">Manage group details</h2>
+            <form method="post" class="row g-2 align-items-end">
+                {% csrf_token %}
+                {% for field in group_form %}
+                    <div class="col-md-6">
+                        <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+                    </div>
+                {% endfor %}
+                <div class="col-12"><button class="btn btn-primary" type="submit" name="update_group" value="1">Save group details</button></div>
+            </form>
+        </div>
+    </section>
+{% endif %}
+
+{% if own_membership and own_membership.status == 'invited' %}
+    <section class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>You are invited to join this group. Accepting sends your membership for lecturer approval.</span>
+        <div class="d-flex gap-2">
+            <form method="post">{% csrf_token %}<button class="btn btn-success btn-sm" name="accept_invitation" value="1">Accept invitation</button></form>
+            <form method="post">{% csrf_token %}<button class="btn btn-outline-secondary btn-sm" name="decline_invitation" value="1">Decline</button></form>
+        </div>
+    </section>
+{% endif %}
+
+<div class="row g-3">
+    <div class="col-md-4">
+        <section id="members" class="card shadow-sm h-100">
+            <div class="card-body">
+                {% if can_view_private %}<h2 class="h5">Approved members</h2>{% endif %}
+                <ul class="list-group list-group-flush mb-3">
+                    {% if can_view_private %}
+                        {% for membership in member_rows %}
+                            <li class="list-group-item px-0 d-flex justify-content-between align-items-center gap-2">
+                                <span>{{ membership.student.get_full_name|default:membership.student.username }}
+                                    {% if group.leader_id == membership.student_id %}<span class="badge text-bg-primary">Leader</span>{% endif %}
+                                </span>
+                                {% if can_manage_group %}
+                                    <form method="post">{% csrf_token %}
+                                        <input type="hidden" name="membership_id" value="{{ membership.pk }}">
+                                        <button class="btn btn-sm btn-outline-danger" name="remove_member" value="1">Remove</button>
+                                    </form>
+                                {% endif %}
+                            </li>
+                        {% empty %}<li class="list-group-item px-0 text-secondary">No approved members.</li>{% endfor %}
+                    {% endif %}
+                </ul>
+                {% if can_manage_group and group.status == 'active' %}
+                    <h3 class="h6">Pending join requests and invitations</h3>
+                    <ul class="list-group mb-3">
+                        {% for membership in pending_memberships %}
+                            <li class="list-group-item">
+                                <div class="d-flex justify-content-between align-items-center gap-2">
+                                    <span>{{ membership.student.get_full_name|default:membership.student.username }}
+                                        <span class="badge text-bg-warning">{{ membership.get_status_display }}</span>
+                                    </span>
+                                    <div class="d-flex gap-1">
+                                        {% if membership.status == 'pending' %}
+                                            <form method="post">{% csrf_token %}<input type="hidden" name="membership_id" value="{{ membership.pk }}"><button class="btn btn-sm btn-success" name="approve_member" value="1">Approve</button></form>
+                                        {% endif %}
+                                        <form method="post">{% csrf_token %}<input type="hidden" name="membership_id" value="{{ membership.pk }}"><button class="btn btn-sm btn-outline-danger" name="reject_member" value="1">Reject</button></form>
+                                    </div>
+                                </div>
+                            </li>
+                        {% empty %}<li class="list-group-item text-secondary">No pending requests or invitations.</li>{% endfor %}
+                    </ul>
+                {% endif %}
+                {% if can_invite %}
+                    <h3 class="h6">Invite course students</h3>
+                    <form method="post">
+                        {% csrf_token %}
+                        {{ invitation_form.as_p }}
+                        <button class="btn btn-sm btn-outline-primary" type="submit" name="invite_students" value="1">Send invitations</button>
+                    </form>
+                {% endif %}
+                {% if can_manage_group and group.status == 'active' %}
+                    <h3 class="h6">Add a student</h3>
+                    <form method="post">
+                        {% csrf_token %}
+                        {{ membership_form.as_p }}
+                        <button class="btn btn-sm btn-primary" type="submit" name="add_member" value="1">Add student</button>
+                    </form>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+    <div class="col-md-8">
+        {% if can_view_private %}
+        <section id="tasks" class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Tasks</h2>
+                <ul class="mb-0">
+                    {% for task in tasks %}
+                        <li>
+                            <a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a>
+                            — {{ task.effective_status_display }} · {{ task.assigned_to.username }}
+                            · {{ task.get_priority_display }} priority
+                            · due {{ task.deadline|date:"M j, Y H:i" }}
+                            {% if task.completed_at %}<span class="small text-secondary">completed {{ task.completed_at|date:"M j, H:i" }}</span>{% endif %}
+                        </li>
+                    {% empty %}<li class="text-secondary">No tasks yet.</li>{% endfor %}
+                </ul>
+            </div>
+        </section>
+
+        <section id="documents" class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Shared documents</h2>
+                {% if request.user.role == "student" and can_view_private %}
+                    <form method="post" enctype="multipart/form-data" class="mb-3">
+                        {% csrf_token %}
+                        <div class="mb-2">
+                            <label class="form-label" for="{{ document_form.document.id_for_label }}">Upload a document</label>
+                            {{ document_form.document }}
+                            <div class="form-text">PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, or ZIP; maximum 25 MB.</div>
+                            {% if document_form.document.errors %}<div class="text-danger small">{{ document_form.document.errors }}</div>{% endif %}
+                        </div>
+                        <button class="btn btn-outline-primary btn-sm" type="submit" name="upload_document" value="1">Upload document</button>
+                    </form>
+                {% endif %}
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th>Document</th><th>Version</th><th>Uploaded by</th><th>Uploaded</th><th>Size</th><th></th></tr></thead>
+                        <tbody>
+                            {% for document in group_documents %}
+                                <tr>
+                                    <td><a href="{% url 'group_document_download' document.pk %}">{{ document.original_filename|default:"Group document" }}</a></td>
+                                    <td>v{{ document.version }}</td>
+                                    <td>{{ document.uploaded_by.get_full_name|default:document.uploaded_by.username }}</td>
+                                    <td>{{ document.uploaded_at|date:"M j, Y H:i" }}</td>
+                                    <td>{{ document.file_size|filesizeformat }}</td>
+                                    <td class="text-end">
+                                        {% if can_manage or document.uploaded_by_id == request.user.pk %}
+                                            <form method="post" action="{% url 'group_document_delete' document.pk %}" onsubmit="return confirm('Delete this document version?');">
+                                                {% csrf_token %}
+                                                <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                                            </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% empty %}
+                                <tr><td colspan="6" class="text-secondary">No shared documents have been uploaded.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="discussions" class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Discussions and task comments</h2>
+                <ul class="list-unstyled">
+                    {% for message in group_messages %}
+                        <li class="mb-2 border-bottom pb-2">
+                            <strong>{{ message.author.username }}</strong>
+                            <span class="text-secondary small">{{ message.created_at|date:"M j, Y H:i" }}</span>
+                            {% if message.task %}<span class="badge text-bg-light"><a href="{% url 'task_detail' message.task_id %}">{{ message.task.title|default:message.task.description|truncatechars:50 }}</a></span>{% endif %}
+                            <div>{{ message.body }}</div>
+                        </li>
+                    {% empty %}<li class="text-secondary">No messages yet.</li>{% endfor %}
+                </ul>
+                <form method="post">
+                    {% csrf_token %}
+                    {{ message_form.as_p }}
+                    <button class="btn btn-outline-primary btn-sm" type="submit" name="post_message" value="1">Post message</button>
+                </form>
+            </div>
+        </section>
+
+        <section class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Final submission</h2>
+                <p>
+                    <strong>Submission deadline:</strong> {{ group.assignment.deadline|date:"M j, Y H:i" }}
+                    · <a href="{% url 'assignment_detail' group.assignment_id %}">View instructions</a>
+                </p>
+                {% if group.assignment.moodle_reference %}
+                    <p class="small">Moodle course/assignment reference: <a href="{{ group.assignment.moodle_reference }}" target="_blank" rel="noopener noreferrer">{{ group.assignment.moodle_reference }}</a></p>
+                {% endif %}
+                {% if latest_submission %}
+                    <p>
+                        Latest:
+                        <a href="{% url 'submission_receipt' latest_submission.pk %}">{{ latest_submission.get_status_display }}</a>
+                        on {{ latest_submission.submitted_at|date:"M j, Y H:i" }}
+                        by {{ latest_submission.submitted_by.username }}
+                        {% if latest_submission.is_late %}<span class="badge text-bg-warning">Submitted after deadline</span>{% endif %}
+                        · <a href="{% url 'submission_download' latest_submission.pk %}">Download file</a>
+                    </p>
+                    {% if latest_submission.grade and latest_submission.grade.is_released and not can_manage %}
+                        <div class="alert alert-success">
+                            Released grade: {{ latest_submission.grade.score }}/{{ latest_submission.grade.max_score }}
+                            <div>{{ latest_submission.grade.feedback }}</div>
+                        </div>
+                    {% endif %}
+                {% else %}
+                    <p class="text-secondary">Status: Not Submitted. No submission has been recorded yet.</p>
+                {% endif %}
+                {% if submission_history %}
+                    <h3 class="h6 mt-3">Submission history</h3>
+                    <ul>
+                        {% for submission in submission_history %}
+                            <li>
+                                <a href="{% url 'submission_receipt' submission.pk %}">{{ submission.get_status_display }}</a>
+                                · {{ submission.submitted_at|date:"M j, Y H:i:s" }}
+                                · {{ submission.original_filename|default:submission.file.name }}
+                                {% if submission.is_late %}<span class="badge text-bg-warning">Late</span>{% endif %}
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+                {% if request.user.role == "student" %}
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    {{ submission_form.as_p }}
+                    <p class="small text-secondary">Submitting here records evidence in SGAMS. It does not submit work to Moodle.</p>
+                    <button class="btn btn-success btn-sm" type="submit" name="submit_assignment" value="1">Submit final assignment</button>
+                </form>
+                {% endif %}
+                {% if can_manage and latest_submission %}
+                <hr>
+                <h3 class="h6">Assessment and lecturer feedback</h3>
+                <form method="post">
+                    {% csrf_token %}
+                    {{ grade_form.as_p }}
+                    <button class="btn btn-primary btn-sm" type="submit" name="save_grade" value="1">Save grade</button>
+                </form>
+                {% endif %}
+            </div>
+        </section>
+        <section id="activity-history" class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5">Activity history</h2>
+                <ul class="mb-0">
+                    {% for event in group_activity_history %}
+                        <li>{{ event.description }} <span class="text-secondary">— {{ event.user.get_full_name|default:event.user.username|default:"System" }}, {{ event.timestamp|date:"M j, Y H:i" }}</span></li>
+                    {% empty %}<li class="text-secondary">No collaboration activity recorded yet.</li>{% endfor %}
+                </ul>
+            </div>
+        </section>
+        {% else %}
+            <section class="card shadow-sm"><div class="card-body">
+                <h2 class="h5">Group space is private</h2>
+                <p class="mb-0 text-secondary">
+                    {% if group.status == 'pending' %}
+                        Group details and collaboration tools will be available after approval.
+                    {% else %}
+                        Your invitation or membership request is awaiting lecturer approval.
+                    {% endif %}
+                </p>
+            </div></section>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
