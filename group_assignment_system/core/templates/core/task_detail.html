@@ -4,10 +4,19 @@
 <h1 class="h3">{{ task.title|default:task.description|truncatechars:100 }}</h1>
 <p>
     <a href="{% url 'group_detail' task.group_id %}">{{ task.group.name }}</a>
-    · assigned to {{ task.assigned_to.username }}
+    · <a href="{% url 'assignment_detail' task.group.assignment_id %}">{{ task.group.assignment.title }}</a>
+    · {% if request.user.is_student and task.assigned_to_id == request.user.id %}
+        <strong class="text-primary">Assigned to you ({{ task.assigned_to.username }})</strong>
+    {% else %}
+        assigned to {{ task.assigned_to.username }}
+    {% endif %}
     · due {{ task.deadline|date:"M j, Y H:i" }}
     · priority <span class="badge text-bg-secondary">{{ task.get_priority_display }}</span>
     <span class="badge {% if task.is_overdue %}text-bg-danger{% elif task.status == 'completed' %}text-bg-success{% elif task.status == 'under_review' %}text-bg-info{% elif task.status == 'in_progress' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ task.effective_status_display }}</span>
+</p>
+<p class="small text-secondary">
+    Created {% if task.created_by %}by {{ task.created_by.get_full_name|default:task.created_by.username }} {% endif %}on {{ task.created_at|date:"M j, Y H:i" }}
+    · Last updated {{ task.updated_at|date:"M j, Y H:i" }}
 </p>
 
 <section class="card shadow-sm mb-3">
@@ -33,6 +42,7 @@
         {% if can_change_status %}
             <hr>
             <h3 class="h6">Update status</h3>
+            <p class="small text-secondary">Record progress by changing the status or posting a progress update below.</p>
             {% if task.is_overdue %}<p class="small text-danger">Overdue is calculated automatically from the internal deadline.</p>{% endif %}
             <form method="post" class="row g-2 align-items-end">
                 {% csrf_token %}
@@ -55,10 +65,11 @@
             <div class="card-body">
                 <h2 class="h5">Progress updates</h2>
                 {% if can_modify_task %}
+                    <p class="small text-secondary">Share a progress update with your group. Your name and posting time are recorded.</p>
                     <form method="post">
                         {% csrf_token %}
                         {{ update_form.as_p }}
-                        <button class="btn btn-outline-primary btn-sm" type="submit" name="add_update" value="1">Post update</button>
+                        <button class="btn btn-outline-primary btn-sm" type="submit" name="add_update" value="1">Update progress</button>
                     </form>
                 {% endif %}
                 <ul class="mt-3">

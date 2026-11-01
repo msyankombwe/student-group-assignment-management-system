@@ -479,14 +479,11 @@ class Task(models.Model):
     STATUS_UNDER_REVIEW = 'under_review'
     STATUS_COMPLETED = 'completed'
     STATUS_OVERDUE = 'overdue'
-    # Legacy value retained for existing rows/tests compatibility
-    STATUS_PENDING = 'Pending'
     STATUS_CHOICES = [
         (STATUS_TODO, 'Not Started'),
         (STATUS_IN_PROGRESS, 'In Progress'),
         (STATUS_UNDER_REVIEW, 'Under Review'),
         (STATUS_COMPLETED, 'Completed'),
-        (STATUS_PENDING, 'Pending'),
     ]
     PRIORITY_LOW = 'low'
     PRIORITY_NORMAL = 'normal'
@@ -576,7 +573,9 @@ class Task(models.Model):
     def save(self, *args, **kwargs):
         self.mark_completed_if_needed()
         if kwargs.get('update_fields') is not None:
-            kwargs['update_fields'] = set(kwargs['update_fields']) | {'completed_at'}
+            kwargs['update_fields'] = (
+                set(kwargs['update_fields']) | {'completed_at', 'updated_at'}
+            )
         previous_assignee_id = None
         if self.pk:
             previous_assignee_id = Task.objects.filter(pk=self.pk).values_list(
@@ -677,6 +676,11 @@ class TaskUpdate(models.Model):
     )
     update_text = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        Task.objects.filter(pk=self.task_id).update(updated_at=timezone.now())
 
 
 def group_document_upload_path(instance, filename):

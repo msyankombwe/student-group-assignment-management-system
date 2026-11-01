@@ -27,7 +27,11 @@
                         <td><span class="badge {% if assignment.status == 'published' %}text-bg-success{% elif assignment.status == 'closed' %}text-bg-secondary{% else %}text-bg-warning{% endif %}">{{ assignment.get_status_display }}</span></td>
                         <td><div class="d-flex flex-wrap gap-1">
                             <a class="btn btn-outline-primary btn-sm" href="{% url 'assignment_detail' assignment.pk %}">Details</a>
-                            {% if can_manage %}<a class="btn btn-primary btn-sm" href="{% url 'assignment_edit' assignment.pk %}">Manage</a>{% endif %}
+                            {% if can_manage %}
+                                <a class="btn btn-primary btn-sm" href="{% url 'assignment_edit' assignment.pk %}">Manage</a>
+                                <a class="btn btn-outline-primary btn-sm" href="{% url 'submission_list' %}?assignment={{ assignment.pk }}">Submissions</a>
+                                <a class="btn btn-outline-secondary btn-sm" href="{% url 'reports' %}?type=contribution&amp;assignment={{ assignment.pk }}">Participation</a>
+                            {% endif %}
                         </div></td>
                     </tr>
                 {% empty %}

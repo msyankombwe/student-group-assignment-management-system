@@ -103,5 +103,17 @@ urlpatterns = [
     path('submissions/', views.submission_list, name='submission_list'),
     path('submissions/<int:pk>/receipt/', views.submission_receipt, name='submission_receipt'),
     path('submissions/<int:pk>/download/', views.submission_download, name='submission_download'),
+    path('api/csrf/', views.api_csrf_token, name='api-csrf'),
+    path('api/session/', views.api_current_user, name='api-session'),
+    path(
+        'api/admin/summary/',
+        views.AdminDashboardSummaryAPIView.as_view(),
+        name='api-admin-summary',
+    ),
+    path(
+        'api/admin/activity/',
+        views.AdminActivityAPIView.as_view(),
+        name='api-admin-activity',
+    ),
     path('api/', include(router.urls)),
 ]

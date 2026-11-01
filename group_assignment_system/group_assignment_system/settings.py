@@ -100,7 +100,17 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
     'core.permissions.RoleAdministratorBackend',
 ]
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+if DEBUG:
+    CORS_ALLOWED_ORIGINS = list(dict.fromkeys([
+        'http://localhost:5173',
+        *CORS_ALLOWED_ORIGINS,
+    ]))
+CORS_ALLOW_CREDENTIALS = True
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = 'dashboard'
 LOGOUT_REDIRECT_URL = 'login'
@@ -127,6 +137,11 @@ CSRF_TRUSTED_ORIGINS = [
     for origin in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',')
     if origin.strip()
 ]
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS = list(dict.fromkeys([
+        'http://localhost:5173',
+        *CSRF_TRUSTED_ORIGINS,
+    ]))
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Africa/Lusaka'

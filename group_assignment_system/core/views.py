@@ -8,12 +8,18 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, F, Max, Prefetch, Q
+from django.middleware.csrf import get_token
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.csrf import ensure_csrf_cookie
+from rest_framework import status
 from rest_framework import viewsets
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.views import APIView
+from rest_framework.response import Response
 
 from .forms import (
     AcademicSessionForm,
@@ -55,8 +61,13 @@ from .models import (
     TaskUpdate,
     User,
 )
-from .permissions import ScopedRolePermission, SystemAdministratorPermission
+from .permissions import (
+    ScopedRolePermission,
+    SystemAdministratorPermission,
+    TaskManagementPermission,
+)
 from .serializers import (
+    AdminUserSerializer,
     AssignmentSerializer,
     CourseSerializer,
     GroupSerializer,
@@ -79,11 +90,131 @@ from .services import (
 
 class RoleLoginView(LoginView):
     template_name = 'core/login.html'
+
+
+@api_view(['GET'])
+@permission_classes([ScopedRolePermission])
+def api_current_user(request):
+    return Response(UserSerializer(request.user).data)
+
+
+@ensure_csrf_cookie
+@api_view(['GET'])
+def api_csrf_token(request):
+    return Response({'csrfToken': get_token(request)})
     redirect_authenticated_user = True
 
 
 class RoleLogoutView(LogoutView):
     next_page = 'login'
+
+
+class AdminDashboardSummaryAPIView(APIView):
+    permission_classes = [SystemAdministratorPermission]
+
+    def get(self, request):
+        recent_cutoff = timezone.now() - timedelta(days=30)
+        return Response({
+            'users': {
+                'total': User.objects.count(),
+                'active': User.objects.filter(is_active=True).count(),
+                'students': User.objects.filter(role=User.ROLE_STUDENT).count(),
+                'lecturers': User.objects.filter(role=User.ROLE_LECTURER).count(),
+                'administrators': User.objects.filter(
+                    Q(role=User.ROLE_ADMIN) | Q(is_superuser=True)
+                ).distinct().count(),
+            },
+            'courses': {
+                'total': Course.objects.count(),
+                'active': Course.objects.filter(is_active=True).count(),
+            },
+            'assignments': {
+                'total': Assignment.objects.count(),
+                'published': Assignment.objects.filter(
+                    status=Assignment.STATUS_PUBLISHED,
+                ).count(),
+                'draft': Assignment.objects.filter(
+                    status=Assignment.STATUS_DRAFT,
+                ).count(),
+            },
+            'groups': {
+                'total': Group.objects.count(),
+                'active': Group.objects.filter(status=Group.STATUS_ACTIVE).count(),
+                'pending': Group.objects.filter(status=Group.STATUS_PENDING).count(),
+            },
+            'submissions': {
+                'latest': Submission.objects.filter(is_latest=True).count(),
+                'awaiting_review': Submission.objects.filter(
+                    is_latest=True,
+                    grade__isnull=True,
+                ).count(),
+            },
+            'activity': {
+                'recent_actions': (
+                    ActivityLog.objects.filter(
+                        timestamp__gte=recent_cutoff,
+                    ).count()
+                    + AuditLog.objects.filter(
+                        timestamp__gte=recent_cutoff,
+                    ).count()
+                ),
+            },
+        })
+
+
+class AdminActivityAPIView(APIView):
+    permission_classes = [SystemAdministratorPermission]
+
+    def get(self, request):
+        limit_value = request.query_params.get('limit', '50')
+        if not limit_value.isdecimal():
+            return Response(
+                {'detail': 'Limit must be a positive integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        limit = int(limit_value)
+        if limit < 1 or limit > 100:
+            return Response(
+                {'detail': 'Limit must be between 1 and 100.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        activities = [
+            {
+                'id': f'activity-{entry.pk}',
+                'category': entry.event_type,
+                'user': entry.user.get_full_name() or entry.user.username,
+                'action': entry.description,
+                'timestamp': entry.timestamp,
+                'assignment': entry.assignment.title if entry.assignment_id else '',
+                'group': entry.group.name if entry.group_id else '',
+            }
+            for entry in ActivityLog.objects.select_related(
+                'user', 'assignment', 'group',
+            ).order_by('-timestamp')[:limit]
+        ]
+        activities.extend(
+            {
+                'id': f'audit-{entry.pk}',
+                'category': 'administrative_audit',
+                'user': entry.user.get_full_name() or entry.user.username,
+                'action': entry.action,
+                'timestamp': entry.timestamp,
+                'assignment': '',
+                'group': '',
+            }
+            for entry in AuditLog.objects.select_related('user').order_by(
+                '-timestamp',
+            )[:limit]
+        )
+        activities.sort(key=lambda entry: entry['timestamp'], reverse=True)
+        return Response([
+            {
+                **entry,
+                'timestamp': entry['timestamp'].isoformat(),
+            }
+            for entry in activities[:limit]
+        ])
 
 
 def _set_group_membership(group, student, status, invited_by=None):
@@ -904,6 +1035,7 @@ def group_list(request):
 @login_required
 def task_list(request):
     user = request.user
+    scope = request.GET.get('scope', 'mine' if user.is_student() else 'group')
     tasks = Task.objects.select_related(
         'group__assignment__course',
         'assigned_to',
@@ -921,10 +1053,18 @@ def task_list(request):
             group__memberships__status=GroupMembership.STATUS_APPROVED,
             group__status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
         )
+        tasks = tasks.distinct()
+        my_task_count = tasks.filter(assigned_to=user).count()
+        group_task_count = tasks.count()
+        if scope != 'mine':
+            scope = 'group'
+        if scope == 'mine':
+            tasks = tasks.filter(assigned_to=user)
     else:
         return _forbidden(request)
 
-    paginator = Paginator(tasks.distinct().order_by(
+    tasks = tasks.distinct()
+    paginator = Paginator(tasks.order_by(
         'internal_deadline__due_at',
         'pk',
     ), 25)
@@ -932,6 +1072,9 @@ def task_list(request):
     return render(request, 'core/task_list.html', {
         'tasks': page_obj.object_list,
         'page_obj': page_obj,
+        'scope': scope,
+        'my_task_count': my_task_count if user.is_student() else None,
+        'group_task_count': group_task_count if user.is_student() else None,
     })
 
 
@@ -2523,12 +2666,17 @@ def _forbidden(request):
 # --- Optional authenticated API (not used by the primary Bootstrap UI) ---
 
 
-class UserViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = UserSerializer
+class UserViewSet(viewsets.ModelViewSet):
+    serializer_class = AdminUserSerializer
     permission_classes = [SystemAdministratorPermission]
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):
-        return User.objects.all().order_by('username')
+        return User.objects.select_related(
+            'student_profile',
+            'lecturer_profile',
+            'administrator_profile',
+        ).order_by('username')
 
 
 class CourseViewSet(viewsets.ModelViewSet):
@@ -2597,37 +2745,50 @@ class GroupViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.is_admin_role():
-            return Group.objects.all()
-        if user.is_lecturer():
-            return Group.objects.filter(
+            groups = Group.objects.all()
+        elif user.is_lecturer():
+            groups = Group.objects.filter(
                 Q(assignment__course__lecturer=user)
                 | Q(assignment__course__lecturer_links__lecturer=user)
             ).distinct()
-        return Group.objects.filter(
-            memberships__student=user,
-            memberships__status=GroupMembership.STATUS_APPROVED,
-            status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
-        ).distinct()
+        else:
+            groups = Group.objects.filter(
+                memberships__student=user,
+                memberships__status=GroupMembership.STATUS_APPROVED,
+                status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
+            ).distinct()
+        return groups.select_related('assignment__course').prefetch_related(
+            'memberships__student',
+            'tasks',
+        )
 
 
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
-    permission_classes = [ScopedRolePermission]
+    permission_classes = [TaskManagementPermission]
+    student_write_actions = ('create', 'update', 'partial_update')
 
     def get_queryset(self):
         user = self.request.user
         if user.is_admin_role():
-            return Task.objects.all()
-        if user.is_lecturer():
-            return Task.objects.filter(
+            tasks = Task.objects.all()
+        elif user.is_lecturer():
+            tasks = Task.objects.filter(
                 Q(group__assignment__course__lecturer=user)
                 | Q(group__assignment__course__lecturer_links__lecturer=user)
             ).distinct()
-        return Task.objects.filter(
-            group__memberships__student=user,
-            group__memberships__status=GroupMembership.STATUS_APPROVED,
-            group__status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
-        ).distinct()
+        else:
+            tasks = Task.objects.filter(
+                group__memberships__student=user,
+                group__memberships__status=GroupMembership.STATUS_APPROVED,
+                group__status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
+            ).distinct()
+        return tasks.select_related(
+            'group__assignment__course',
+            'assigned_to',
+            'created_by',
+            'internal_deadline',
+        )
 
     def perform_create(self, serializer):
         task = serializer.save(created_by=self.request.user)
@@ -2713,7 +2874,8 @@ class TaskViewSet(viewsets.ModelViewSet):
 
 class TaskUpdateViewSet(viewsets.ModelViewSet):
     serializer_class = TaskUpdateSerializer
-    permission_classes = [ScopedRolePermission]
+    permission_classes = [TaskManagementPermission]
+    student_write_actions = ('create',)
 
     def get_queryset(self):
         user = self.request.user
@@ -2741,3 +2903,28 @@ class TaskUpdateViewSet(viewsets.ModelViewSet):
             task=update.task,
         )
         log_audit(self.request.user, f'Added progress update to task {update.task_id}')
+
+    def perform_update(self, serializer):
+        update = serializer.save()
+        record_activity(
+            self.request.user,
+            'task_update_edited',
+            'Edited a task progress update',
+            assignment=update.task.group.assignment,
+            group=update.task.group,
+            task=update.task,
+        )
+        log_audit(self.request.user, f'Edited progress update {update.pk}')
+
+    def perform_destroy(self, instance):
+        task = instance.task
+        record_activity(
+            self.request.user,
+            'task_update_deleted',
+            'Deleted a task progress update',
+            assignment=task.group.assignment,
+            group=task.group,
+            task=task,
+        )
+        log_audit(self.request.user, f'Deleted progress update {instance.pk}')
+        instance.delete()

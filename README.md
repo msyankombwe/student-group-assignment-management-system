@@ -55,7 +55,7 @@ Open http://127.0.0.1:8000/ and sign in with a demo account below.
 1. Log in as `admin.demo`, create an academic year and semester under **Academic calendar**, then create a course assigned to `lecturer.banda`.
 2. Log in as `lecturer.banda`, create and publish an assignment for that course, then create groups or review student-proposed groups.
 3. Add enrolled students or approve join requests and invitations; students can propose groups when the assignment allows it.
-4. Create and assign group tasks, set priorities and internal deadlines, track progress/status history, and monitor overdue work.
+4. Create and assign group tasks to approved group members, set priorities and internal deadlines, track creators and last-updated times, and monitor overdue work. Students can distinguish their **My Tasks** from all **Group Tasks**, then update task status or post progress from task details. The server enforces group membership for students and assignment ownership for lecturers across both the web interface and API. Task statuses are Not Started, In Progress, Under Review, and Completed; Overdue is calculated from the deadline and completion status rather than stored.
 5. Students in approved groups can use the workspace to share versioned PDF, Office, TXT, and ZIP documents, discuss assignment work, and review activity history.
 6. Log in as a group student (`student01`) to view published instructions, deadlines, membership status, post a message, update tasks, and submit work.
 7. As lecturer, review group communication and documents, review the submission, release feedback, and monitor contribution records.

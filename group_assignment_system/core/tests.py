@@ -3,13 +3,15 @@ import tempfile
 from datetime import timedelta
 from pathlib import Path
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core import mail
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from .models import (
@@ -32,6 +34,7 @@ from .models import (
     Submission,
     Task,
     TaskAssignment,
+    TaskUpdate,
     User,
 )
 from .forms import AssignmentForm, GroupDocumentUploadForm
@@ -208,6 +211,90 @@ class GroupAssignmentWorkflowTests(TestCase):
         response = self.client.get(reverse('dashboard'))
         self.assertContains(response, reverse('admin:index'))
 
+    def test_lecturer_portal_connects_managed_work_to_participation_and_grading(self):
+        private_assignment = Assignment.objects.create(
+            course=self.other_course,
+            title='Private lecturer assignment',
+            description='Outside this lecturer scope',
+            deadline=timezone.now() + timedelta(days=5),
+        )
+        Group.objects.create(
+            assignment=private_assignment,
+            name='Private lecturer group',
+        )
+        with tempfile.TemporaryDirectory() as media_dir:
+            with override_settings(MEDIA_ROOT=Path(media_dir)):
+                Submission.objects.create(
+                    group=self.group,
+                    submitted_by=self.student,
+                    file=SimpleUploadedFile('lecturer-review.txt', b'submission evidence'),
+                )
+                self.login(self.lecturer)
+
+                dashboard_response = self.client.get(reverse('dashboard'))
+                self.assertEqual(dashboard_response.status_code, 200)
+                self.assertContains(dashboard_response, 'Managed Courses')
+                self.assertContains(dashboard_response, 'Group Task Monitoring')
+                self.assertContains(dashboard_response, 'Review &amp; grade')
+                self.assertContains(dashboard_response, 'Participation')
+                self.assertNotContains(dashboard_response, 'Private lecturer assignment')
+
+                assignments_response = self.client.get(reverse('assignment_list'))
+                self.assertContains(assignments_response, 'Submissions')
+                self.assertContains(assignments_response, 'Participation')
+                self.assertNotContains(assignments_response, 'Private lecturer assignment')
+
+                assignment_response = self.client.get(
+                    reverse('assignment_detail', args=[self.assignment.pk])
+                )
+                self.assertContains(assignment_response, 'Review submissions')
+                self.assertContains(assignment_response, 'Participation')
+                self.assertContains(assignment_response, self.group.name)
+
+                submissions_response = self.client.get(reverse('submission_list'))
+                self.assertContains(submissions_response, 'Review / grade')
+                self.assertNotContains(submissions_response, 'Private lecturer assignment')
+
+                group_response = self.client.get(
+                    reverse('group_detail', args=[self.group.pk])
+                )
+                self.assertContains(group_response, 'Assessment and lecturer feedback')
+                self.assertContains(group_response, 'Save grade')
+                self.assertContains(group_response, 'Review participation')
+
+                participation_response = self.client.get(
+                    reverse('reports'),
+                    {'type': 'contribution', 'group': self.group.pk},
+                )
+                self.assertEqual(participation_response.status_code, 200)
+                self.assertContains(participation_response, self.student.username)
+                self.assertNotContains(participation_response, 'Private lecturer group')
+
+    def test_portal_course_catalogue_and_navigation_are_role_aware(self):
+        self.login(self.student)
+        response = self.client.get(reverse('course_list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'My Courses')
+        self.assertContains(response, 'BIT326')
+        self.assertContains(response, 'Open Course')
+        self.assertContains(response, 'My Groups')
+        self.assertContains(response, 'My Tasks')
+        self.assertContains(response, 'Group Tasks')
+
+        self.login(self.lecturer)
+        response = self.client.get(reverse('course_list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Courses')
+        self.assertContains(response, 'BIT326')
+        self.assertContains(response, 'My Courses')
+        self.assertContains(response, 'Submissions')
+
+        self.login(self.administrator)
+        response = self.client.get(reverse('course_list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Create Course')
+        self.assertContains(response, 'Administration')
+
     def test_login_and_post_logout_protect_authenticated_pages(self):
         response = self.client.post(reverse('login'), {
             'username': self.student.username,
@@ -283,11 +370,26 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertNotEqual(self.client.get(reverse('admin:index')).status_code, 200)
 
     def test_student_api_is_read_scoped_and_cannot_mutate(self):
+        response = self.client.get(reverse('api-session'))
+        self.assertIn(response.status_code, (401, 403))
+
         self.login(self.student)
+        response = self.client.get(reverse('api-session'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['id'], self.student.pk)
+        self.assertEqual(response.data['role'], User.ROLE_STUDENT)
+
         response = self.client.get(reverse('api-groups-list'))
         self.assertEqual(response.status_code, 200)
         group_names = [group['name'] for group in response.data]
         self.assertEqual(group_names, ['Team Alpha'])
+        self.assertEqual(response.data[0]['progress'], 0)
+        self.assertEqual(response.data[0]['assignment_title'], self.assignment.title)
+        self.assertEqual(response.data[0]['course_code'], self.course.code)
+        self.assertEqual(
+            {member['username'] for member in response.data[0]['members']},
+            {'student', 'peer'},
+        )
 
         response = self.client.get(reverse('api-groups-detail', args=[self.private_group.pk]))
         self.assertEqual(response.status_code, 404)
@@ -301,9 +403,508 @@ class GroupAssignmentWorkflowTests(TestCase):
             'name': 'Unauthorized group',
         })
         self.assertEqual(response.status_code, 403)
+        task = Task.objects.create(
+            group=self.group,
+            title='Team planning',
+            description='Prepare the team plan',
+            assigned_to=self.student,
+            deadline=timezone.now() + timedelta(days=1),
+        )
+        response = self.client.get(reverse('api-tasks-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.data], [task.pk])
+        self.assertEqual(response.data[0]['assignment'], self.assignment.pk)
+        self.assertEqual(response.data[0]['assigned_to'], self.student.pk)
+        self.assertEqual(response.data[0]['assigned_to_name'], self.student.username)
+        self.assertEqual(response.data[0]['assignment_title'], self.assignment.title)
+        self.assertEqual(response.data[0]['group_name'], self.group.name)
+        self.assertEqual(response.data[0]['effective_status'], Task.STATUS_TODO)
+        self.assertEqual(response.data[0]['group'], self.group.pk)
+        self.assertIn('deadline', response.data[0])
+        group_response = self.client.get(reverse('api-groups-detail', args=[self.group.pk]))
+        self.assertEqual(group_response.data['progress'], 0)
+        response = self.client.patch(
+            reverse('api-tasks-detail', args=[task.pk]),
+            {'status': Task.STATUS_COMPLETED},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        group_response = self.client.get(reverse('api-groups-detail', args=[self.group.pk]))
+        self.assertEqual(group_response.data['progress'], 100)
+        response = self.client.post(reverse('api-tasks-list'), {
+            'group': self.group.pk,
+            'title': 'Group member task',
+            'description': 'Created by an authorised group member',
+            'assigned_to': self.peer.pk,
+            'deadline': (timezone.now() + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, 201)
+        created_task = Task.objects.get(title='Group member task')
+        self.assertEqual(created_task.created_by, self.student)
+        self.assertEqual(created_task.assigned_to, self.peer)
+        self.assertTrue(
+            created_task.activity_logs.filter(
+                user=self.student,
+                event_type='task_created',
+            ).exists()
+        )
+
+        response = self.client.post(reverse('api-tasks-list'), {
+            'group': self.private_group.pk,
+            'title': 'Unrelated group task',
+            'description': 'Must not be created',
+            'assigned_to': self.outsider.pk,
+            'deadline': (timezone.now() + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Task.objects.filter(title='Unrelated group task').exists())
+
+        response = self.client.post(reverse('api-tasks-list'), {
+            'group': self.group.pk,
+            'title': 'Outsider assignee task',
+            'description': 'Must not be assigned outside the group',
+            'assigned_to': self.outsider.pk,
+            'deadline': (timezone.now() + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Task.objects.filter(title='Outsider assignee task').exists())
         response = self.client.get(reverse('api-assignments-list'))
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item['id'] for item in response.data], [self.assignment.pk])
+
+    def test_local_vite_origin_has_credentialed_cors_and_csrf_trust(self):
+        frontend_origin = 'http://localhost:5173'
+        self.assertIn(frontend_origin, settings.CORS_ALLOWED_ORIGINS)
+        self.assertTrue(settings.CORS_ALLOW_CREDENTIALS)
+        self.assertIn(frontend_origin, settings.CSRF_TRUSTED_ORIGINS)
+        self.assertIn(
+            'rest_framework.authentication.SessionAuthentication',
+            settings.REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'],
+        )
+
+        response = self.client.options(
+            reverse('api-session'),
+            HTTP_ORIGIN=frontend_origin,
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='GET',
+        )
+        self.assertEqual(response['Access-Control-Allow-Origin'], frontend_origin)
+        self.assertEqual(response['Access-Control-Allow-Credentials'], 'true')
+
+        untrusted_response = self.client.options(
+            reverse('api-session'),
+            HTTP_ORIGIN='http://attacker.example',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='GET',
+        )
+        self.assertNotIn('Access-Control-Allow-Origin', untrusted_response)
+
+    def test_authenticated_api_writes_require_csrf_and_trust_vite_origin(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.student)
+        frontend_origin = 'http://localhost:5173'
+        task_data = {
+            'group': self.group.pk,
+            'title': 'CSRF-protected task',
+            'description': 'Created with the authenticated frontend session.',
+            'assigned_to': self.student.pk,
+            'deadline': (timezone.now() + timedelta(days=1)).isoformat(),
+        }
+
+        rejected = client.post(
+            reverse('api-tasks-list'),
+            task_data,
+            content_type='application/json',
+            HTTP_ORIGIN=frontend_origin,
+        )
+        self.assertEqual(rejected.status_code, 403)
+
+        csrf_response = client.get(reverse('api-csrf'))
+        self.assertEqual(csrf_response.status_code, 200)
+        self.assertIn('csrftoken', client.cookies)
+        csrf_token = csrf_response.json()['csrfToken']
+
+        accepted = client.post(
+            reverse('api-tasks-list'),
+            task_data,
+            content_type='application/json',
+            HTTP_ORIGIN=frontend_origin,
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(accepted.status_code, 201)
+        self.assertTrue(Task.objects.filter(title='CSRF-protected task').exists())
+
+    def test_administrator_api_manages_users_roles_courses_and_activity(self):
+        self.login(self.administrator)
+        users_response = self.client.get(reverse('api-users-list'))
+        self.assertEqual(users_response.status_code, 200)
+        self.assertTrue(all('password' not in user for user in users_response.data))
+
+        created_user_response = self.client.post(
+            reverse('api-users-list'),
+            {
+                'username': 'api-managed-user',
+                'first_name': 'API',
+                'last_name': 'Managed',
+                'email': 'api-managed@example.test',
+                'role': User.ROLE_LECTURER,
+                'password': 'X9!safe-Admin-Password-Value',
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(created_user_response.status_code, 201)
+        managed_user = User.objects.get(username='api-managed-user')
+        self.assertTrue(managed_user.check_password('X9!safe-Admin-Password-Value'))
+        self.assertNotIn('password', created_user_response.data)
+
+        updated_user_response = self.client.patch(
+            reverse('api-users-detail', args=[managed_user.pk]),
+            {'role': User.ROLE_STUDENT, 'is_active': False},
+            content_type='application/json',
+        )
+        self.assertEqual(updated_user_response.status_code, 200)
+        managed_user.refresh_from_db()
+        self.assertEqual(managed_user.role, User.ROLE_STUDENT)
+        self.assertFalse(managed_user.is_active)
+
+        course_response = self.client.post(
+            reverse('api-courses-list'),
+            {
+                'code': 'ADM501',
+                'name': 'Administration API Course',
+                'programme': 'BIT',
+                'semester': 'Fall',
+                'academic_year': '2026',
+                'lecturer': self.lecturer.pk,
+                'is_active': True,
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(course_response.status_code, 201)
+        course_id = course_response.data['id']
+        course_update = self.client.patch(
+            reverse('api-courses-detail', args=[course_id]),
+            {'is_active': False},
+            content_type='application/json',
+        )
+        self.assertEqual(course_update.status_code, 200)
+        self.assertFalse(course_update.data['is_active'])
+
+        record_activity(
+            self.administrator,
+            'admin_api_test',
+            'Reviewed administrator API activity',
+            assignment=self.assignment,
+            group=self.group,
+        )
+        AuditLog.objects.create(
+            user=self.administrator,
+            action='Updated an administrator-managed record',
+        )
+        summary = self.client.get(reverse('api-admin-summary'))
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(summary.data['users']['total'], User.objects.count())
+        self.assertEqual(summary.data['courses']['total'], Course.objects.count())
+        self.assertEqual(summary.data['assignments']['total'], Assignment.objects.count())
+        self.assertEqual(summary.data['groups']['total'], Group.objects.count())
+
+        activity = self.client.get(reverse('api-admin-activity'), {'limit': 5})
+        self.assertEqual(activity.status_code, 200)
+        self.assertLessEqual(len(activity.data), 5)
+        self.assertTrue(any(
+            entry['action'] == 'Reviewed administrator API activity'
+            for entry in activity.data
+        ))
+        self.assertTrue(any(
+            entry['action'] == 'Updated an administrator-managed record'
+            for entry in activity.data
+        ))
+
+        self_response = self.client.patch(
+            reverse('api-users-detail', args=[self.administrator.pk]),
+            {'role': User.ROLE_STUDENT},
+            content_type='application/json',
+        )
+        self.assertEqual(self_response.status_code, 400)
+        self.assertTrue(User.objects.get(pk=self.administrator.pk).is_admin_role())
+
+    def test_administrator_api_denies_students_and_invalid_activity_limits(self):
+        self.login(self.student)
+        self.assertEqual(self.client.get(reverse('api-users-list')).status_code, 403)
+        self.assertEqual(self.client.get(reverse('api-admin-summary')).status_code, 403)
+        self.assertEqual(self.client.get(reverse('api-admin-activity')).status_code, 403)
+        self.assertEqual(self.client.post(reverse('api-courses-list'), {
+            'name': 'Student-created course',
+            'semester': 'Fall',
+            'academic_year': '2026',
+        }).status_code, 403)
+
+        self.login(self.administrator)
+        invalid_limit = self.client.get(
+            reverse('api-admin-activity'),
+            {'limit': '101'},
+        )
+        self.assertEqual(invalid_limit.status_code, 400)
+
+    def test_superuser_session_api_exposes_administrator_portal_role(self):
+        superuser = User.objects.create_superuser(
+            username='root-portal-user',
+            email='root-portal@example.test',
+            password='X9!safe-Root-Password-Value',
+        )
+        self.assertEqual(superuser.role, User.ROLE_STUDENT)
+        self.login(superuser)
+
+        session_response = self.client.get(reverse('api-session'))
+        self.assertEqual(session_response.status_code, 200)
+        self.assertEqual(session_response.data['role'], User.ROLE_ADMIN)
+        self.assertEqual(self.client.get(reverse('api-users-list')).status_code, 200)
+
+    def test_student_api_can_only_modify_tasks_in_their_group(self):
+        task = Task.objects.create(
+            group=self.group,
+            title='Team planning',
+            description='Prepare the team plan',
+            assigned_to=self.student,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+        unrelated_task = Task.objects.create(
+            group=self.private_group,
+            title='Private planning',
+            description='Keep this task private',
+            assigned_to=self.outsider,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+        self.login(self.student)
+
+        response = self.client.patch(
+            reverse('api-tasks-detail', args=[task.pk]),
+            {'status': Task.STATUS_IN_PROGRESS},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.STATUS_IN_PROGRESS)
+        self.assertTrue(
+            task.activity_logs.filter(
+                user=self.student,
+                event_type='task_status',
+            ).exists()
+        )
+        response = self.client.delete(reverse('api-tasks-detail', args=[task.pk]))
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Task.objects.filter(pk=task.pk).exists())
+
+        response = self.client.patch(
+            reverse('api-tasks-detail', args=[unrelated_task.pk]),
+            {'status': Task.STATUS_COMPLETED},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 404)
+        unrelated_task.refresh_from_db()
+        self.assertEqual(unrelated_task.status, Task.STATUS_TODO)
+
+    def test_task_updates_record_authenticated_author_and_reject_spoofing(self):
+        task = Task.objects.create(
+            group=self.group,
+            title='Research',
+            description='Collect sources',
+            assigned_to=self.student,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+        self.login(self.student)
+
+        response = self.client.post(
+            reverse('api-taskupdates-list'),
+            {
+                'task': task.pk,
+                'author': self.outsider.pk,
+                'update_text': 'Collected three sources.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        update = TaskUpdate.objects.get(task=task)
+        self.assertEqual(update.author, self.student)
+        self.assertEqual(response.data['author'], self.student.pk)
+        self.assertEqual(response.data['author_name'], self.student.username)
+        self.assertEqual(response.data['task_title'], task.title)
+        self.assertTrue(
+            task.activity_logs.filter(
+                user=self.student,
+                event_type='task_update',
+            ).exists()
+        )
+
+        self.login(self.lecturer)
+        response = self.client.patch(
+            reverse('api-taskupdates-detail', args=[update.pk]),
+            {'update_text': 'Reviewed and confirmed three sources.'},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        update.refresh_from_db()
+        self.assertEqual(update.author, self.student)
+        self.assertTrue(
+            task.activity_logs.filter(
+                user=self.lecturer,
+                event_type='task_update_edited',
+            ).exists()
+        )
+
+        self.login(self.student)
+        unrelated_task = Task.objects.create(
+            group=self.private_group,
+            title='Private research',
+            description='Do not expose updates',
+            assigned_to=self.outsider,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+        response = self.client.post(
+            reverse('api-taskupdates-list'),
+            {
+                'task': unrelated_task.pk,
+                'update_text': 'Should be rejected.',
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(TaskUpdate.objects.filter(task=unrelated_task).exists())
+
+    def test_lecturer_and_administrator_task_api_access_is_scoped_and_audited(self):
+        task = Task.objects.create(
+            group=self.group,
+            title='Lecturer-managed task',
+            description='Review the report',
+            assigned_to=self.student,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+        other_assignment = Assignment.objects.create(
+            course=self.other_course,
+            title='Other lecturer assignment',
+            description='Another course',
+            deadline=timezone.now() + timedelta(days=30),
+        )
+        other_group = Group.objects.create(
+            assignment=other_assignment,
+            name='Other lecturer group',
+        )
+        CourseEnrolment.objects.create(
+            course=self.other_course,
+            student=self.outsider,
+        )
+        GroupMembership.objects.create(group=other_group, student=self.outsider)
+
+        self.login(self.lecturer)
+        response = self.client.patch(
+            reverse('api-tasks-detail', args=[task.pk]),
+            {'status': Task.STATUS_IN_PROGRESS},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        self.assertTrue(
+            task.activity_logs.filter(
+                user=self.lecturer,
+                event_type='task_status',
+            ).exists()
+        )
+
+        response = self.client.post(reverse('api-tasks-list'), {
+            'group': other_group.pk,
+            'title': 'Cross-course task',
+            'description': 'Should be rejected',
+            'assigned_to': self.outsider.pk,
+            'deadline': (timezone.now() + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Task.objects.filter(title='Cross-course task').exists())
+        foreign_task = Task.objects.create(
+            group=other_group,
+            title='Foreign task',
+            description='Another lecturer task',
+            assigned_to=self.outsider,
+            deadline=timezone.now() + timedelta(days=1),
+        )
+        response = self.client.patch(
+            reverse('api-tasks-detail', args=[foreign_task.pk]),
+            {'status': Task.STATUS_IN_PROGRESS},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 404)
+        foreign_task.refresh_from_db()
+        self.assertEqual(foreign_task.status, Task.STATUS_TODO)
+
+        self.login(self.administrator)
+        response = self.client.post(reverse('api-tasks-list'), {
+            'group': self.group.pk,
+            'title': 'Administrator task',
+            'description': 'Created by the administrator',
+            'assigned_to': self.peer.pk,
+            'deadline': (timezone.now() + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, 201)
+        administrator_task = Task.objects.get(title='Administrator task')
+        self.assertEqual(administrator_task.created_by, self.administrator)
+        response = self.client.patch(
+            reverse('api-tasks-detail', args=[task.pk]),
+            {'status': Task.STATUS_COMPLETED},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.STATUS_COMPLETED)
+
+    def test_task_api_exposes_read_only_ownership_and_audit_timestamps(self):
+        task = Task.objects.create(
+            group=self.group,
+            title='Document research',
+            description='Collect sources',
+            created_by=self.lecturer,
+            assigned_to=self.student,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+
+        self.login(self.lecturer)
+        response = self.client.get(reverse('api-tasks-detail', args=[task.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['assignment'], self.assignment.pk)
+        self.assertEqual(response.data['created_by'], self.lecturer.pk)
+        self.assertEqual(parse_datetime(response.data['created_at']), task.created_at)
+        self.assertEqual(parse_datetime(response.data['updated_at']), task.updated_at)
+
+    def test_task_status_choices_are_canonical_and_overdue_is_derived(self):
+        self.assertEqual(
+            {value for value, _label in Task.STATUS_CHOICES},
+            {
+                Task.STATUS_TODO,
+                Task.STATUS_IN_PROGRESS,
+                Task.STATUS_UNDER_REVIEW,
+                Task.STATUS_COMPLETED,
+            },
+        )
+        self.assertNotIn(Task.STATUS_OVERDUE, {
+            value for value, _label in Task.STATUS_CHOICES
+        })
+        self.assertFalse(hasattr(Task, 'STATUS_PENDING'))
+
+    def test_progress_update_refreshes_task_last_updated_timestamp(self):
+        task = Task.objects.create(
+            group=self.group,
+            title='Research',
+            description='Collect sources',
+            assigned_to=self.student,
+            deadline=timezone.now() + timedelta(days=2),
+        )
+        previous_update = timezone.now() - timedelta(days=1)
+        Task.objects.filter(pk=task.pk).update(updated_at=previous_update)
+
+        TaskUpdate.objects.create(
+            task=task,
+            author=self.student,
+            update_text='Collected three sources.',
+        )
+
+        task.refresh_from_db()
+        self.assertGreater(task.updated_at, previous_update)
 
     def test_group_and_task_navigation_pages_are_role_scoped(self):
         Task.objects.create(
@@ -312,6 +913,13 @@ class GroupAssignmentWorkflowTests(TestCase):
             description='Prepare the team plan',
             assigned_to=self.student,
             deadline=timezone.now() + timedelta(days=1),
+        )
+        Task.objects.create(
+            group=self.group,
+            title='Peer research',
+            description='Collect research sources',
+            assigned_to=self.peer,
+            deadline=timezone.now() + timedelta(days=2),
         )
         Task.objects.create(
             group=self.private_group,
@@ -329,10 +937,28 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertNotContains(response, 'Private Team')
         response = self.client.get(reverse('task_list'))
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'My Tasks')
         self.assertContains(response, 'Team planning')
+        self.assertNotContains(response, 'Peer research')
+        self.assertContains(response, 'Assigned to me')
         self.assertNotContains(response, 'Private planning')
+        self.assertEqual(response.context['my_task_count'], 1)
+        self.assertEqual(response.context['group_task_count'], 2)
+        response = self.client.get(reverse('task_list'), {'scope': 'group'})
+        self.assertContains(response, 'Group Tasks')
+        self.assertContains(response, 'Team planning')
+        self.assertContains(response, 'Peer research')
+        self.assertContains(response, 'Group member')
+        self.assertNotContains(response, 'Private planning')
+        self.assertEqual(response.context['my_task_count'], 1)
+        self.assertEqual(response.context['group_task_count'], 2)
+        group_page = self.client.get(reverse('group_detail', args=[self.group.pk]))
+        self.assertContains(group_page, 'Create &amp; assign task')
+        self.assertContains(group_page, 'Assigned to me')
+        self.assertContains(group_page, reverse('task_create', args=[self.group.pk]))
         dashboard = self.client.get(reverse('dashboard'))
-        self.assertContains(dashboard, 'Group workspace')
+        self.assertContains(dashboard, 'My Groups')
+        self.assertContains(dashboard, 'Course Overview')
         self.assertContains(dashboard, 'Contributions')
 
         self.login(self.lecturer)
@@ -348,7 +974,7 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.login(self.administrator)
         response = self.client.get(reverse('group_list'))
         self.assertContains(response, 'Team Alpha')
-        self.assertContains(response, 'Users &amp; administration')
+        self.assertContains(response, 'Administration')
 
     def test_lecturer_api_rejects_assignments_for_unmanaged_courses(self):
         self.login(self.lecturer)
@@ -1178,15 +1804,25 @@ class GroupAssignmentWorkflowTests(TestCase):
 
     def test_group_member_can_create_task_assigned_to_group_member(self):
         self.login(self.student)
+        form_response = self.client.get(reverse('task_create', args=[self.group.pk]))
+        self.assertEqual(form_response.status_code, 200)
+        self.assertContains(form_response, 'Assign to group member')
+        self.assertContains(form_response, 'Choose the student responsible for completing this task.')
+        deadline = timezone.localtime(timezone.now() + timedelta(days=3)).replace(
+            second=0,
+            microsecond=0,
+        )
         response = self.client.post(reverse('task_create', args=[self.group.pk]), {
             'title': 'Design',
             'description': 'Prepare the system design',
             'assigned_to': self.peer.pk,
-            'deadline': (timezone.now() + timedelta(days=3)).strftime('%Y-%m-%dT%H:%M'),
+            'deadline': deadline.strftime('%Y-%m-%dT%H:%M'),
         })
         task = Task.objects.get(description='Prepare the system design')
         self.assertRedirects(response, reverse('task_detail', args=[task.pk]))
+        self.assertEqual(task.created_by, self.student)
         self.assertEqual(task.assigned_to, self.peer)
+        self.assertEqual(task.deadline, deadline)
         self.assertTrue(TaskAssignment.objects.filter(task=task, student=self.peer).exists())
         self.assertEqual(task.internal_deadline.due_at, task.deadline)
         self.assertTrue(Notification.objects.filter(user=self.peer).exists())
@@ -1207,6 +1843,22 @@ class GroupAssignmentWorkflowTests(TestCase):
             deadline=timezone.now() + timedelta(days=2),
         )
         self.login(self.student)
+        detail_response = self.client.get(reverse('task_detail', args=[task.pk]))
+        self.assertContains(detail_response, 'assigned to peer')
+        self.assertContains(detail_response, 'Update progress')
+        response = self.client.post(reverse('task_detail', args=[task.pk]), {
+            'add_update': '1',
+            'update_text': 'The report draft is ready for review.',
+        })
+        self.assertRedirects(response, reverse('task_detail', args=[task.pk]))
+        update = task.updates.get(update_text='The report draft is ready for review.')
+        self.assertEqual(update.author, self.student)
+        self.assertTrue(
+            task.activity_logs.filter(
+                user=self.student,
+                event_type='task_update',
+            ).exists()
+        )
         response = self.client.post(reverse('task_detail', args=[task.pk]), {
             'change_status': '1',
             'status': Task.STATUS_COMPLETED,
@@ -1234,6 +1886,7 @@ class GroupAssignmentWorkflowTests(TestCase):
             assigned_to=self.peer,
             deadline=timezone.now() + timedelta(days=2),
         )
+        original_updated_at = task.updated_at
         new_deadline = timezone.localtime(timezone.now() + timedelta(days=5)).replace(
             second=0,
             microsecond=0,
@@ -1260,6 +1913,7 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(task.assigned_to, self.student)
         self.assertEqual(task.priority, Task.PRIORITY_URGENT)
         self.assertEqual(task.deadline, new_deadline)
+        self.assertGreater(task.updated_at, original_updated_at)
         self.assertTrue(task.activity_logs.filter(event_type='task_updated').exists())
         self.assertTrue(TaskAssignment.objects.filter(
             task=task,

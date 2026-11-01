@@ -32,7 +32,7 @@ from .models import (
     TaskUpdate,
     User,
 )
-from .services import log_audit
+from .services import log_audit, record_activity
 
 
 class TaskAdminForm(forms.ModelForm):
@@ -47,6 +47,7 @@ class TaskAdminForm(forms.ModelForm):
             'created_by',
             'assigned_to',
             'deadline',
+            'priority',
             'status',
             'completed_at',
         )
@@ -205,8 +206,45 @@ class GroupMembershipAdmin(admin.ModelAdmin):
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
     form = TaskAdminForm
-    list_display = ('title', 'group', 'assigned_to', 'deadline', 'status')
+    list_display = (
+        'title',
+        'group',
+        'assigned_to',
+        'created_by',
+        'priority',
+        'deadline',
+        'status',
+        'updated_at',
+    )
     list_filter = ('status',)
+
+    def save_model(self, request, obj, form, change):
+        if not obj.created_by_id:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+        action = 'Updated' if change else 'Created'
+        event_type = 'task_updated' if change else 'task_created'
+        record_activity(
+            request.user,
+            event_type,
+            f'{action} task {obj.title or obj.description[:80]}',
+            assignment=obj.group.assignment,
+            group=obj.group,
+            task=obj,
+        )
+        log_audit(request.user, f'{action} task {obj.pk}')
+
+    def delete_model(self, request, obj):
+        record_activity(
+            request.user,
+            'task_deleted',
+            f'Deleted task {obj.title or obj.description[:80]}',
+            assignment=obj.group.assignment,
+            group=obj.group,
+            task=obj,
+        )
+        log_audit(request.user, f'Deleted task {obj.pk}')
+        super().delete_model(request, obj)
 
 
 @admin.register(Submission)

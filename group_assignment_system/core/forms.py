@@ -385,12 +385,17 @@ class TaskForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.group = group
         self.fields['priority'].required = False
+        self.fields['assigned_to'].label = 'Assign to group member'
+        self.fields['assigned_to'].help_text = (
+            'Choose the student responsible for completing this task.'
+        )
         if self.instance.pk and self.instance.deadline:
             self.fields['deadline'].initial = timezone.localtime(self.instance.deadline)
         if group:
             self.fields['assigned_to'].queryset = User.objects.filter(
                 group_memberships__group=group,
                 group_memberships__status=GroupMembership.STATUS_APPROVED,
+                role=User.ROLE_STUDENT,
                 is_active=True,
             ).distinct()
 

@@ -12,8 +12,8 @@ Status key: **Done** · **Partial** · **Outstanding** · **Tested**
 | FR-06 | Assignment Creation | Done | Create/publish fields; lecturer scoped |
 | FR-07 | Group Formation | Done / Tested | Lecturer creates groups |
 | FR-08 | Group Membership | Done / Tested | Add members; private access enforced |
-| FR-09 | Task Allocation | Done / Tested | Member-only assignees |
-| FR-10 | Internal Deadlines | Done / Tested | Deadlines + overdue flags |
+| FR-09 | Task Allocation | Done / Tested | Tasks link to the assignment through their group; assignees must be approved group members; creator, priority, status, and update timestamps are recorded and exposed by the API |
+| FR-10 | Internal Deadlines | Done / Tested | Task deadlines are required; Overdue is derived consistently and is not stored as a task status |
 | FR-11 | File Management | Partial / Tested | Evidence upload/download; group files model ready |
 | FR-12 | Group Communication | Done | Stored chronological messages |
 | FR-13 | Progress Monitoring | Partial | Dashboard + group progress % from tasks |

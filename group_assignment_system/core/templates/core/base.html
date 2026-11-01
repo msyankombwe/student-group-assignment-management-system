@@ -13,67 +13,78 @@
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to main content</a>
-<nav class="navbar navbar-expand-xxl navbar-dark mb-4" aria-label="Main navigation">
-    <div class="container">
-        <a class="navbar-brand fw-semibold" href="{% url 'dashboard' %}" translate="no">UNILUS SGAMS</a>
-        {% if request.user.is_authenticated %}
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle main navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="mainNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}" {% if request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>Dashboard</a></li>
-                    {% if request.user.is_student %}
-                        <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}">Courses</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}">Assignments</a></li>
-                        <li class="nav-item dropdown">
-                            <button class="nav-link dropdown-toggle" type="button" id="workspaceMenu" data-bs-toggle="dropdown" aria-expanded="false">Group workspace</button>
-                            <ul class="dropdown-menu" aria-labelledby="workspaceMenu">
-                                <li><a class="dropdown-item" href="{% url 'group_list' %}">My groups</a></li>
-                                <li><a class="dropdown-item" href="{% url 'task_list' %}">Tasks</a></li>
-                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=documents">Documents</a></li>
-                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=discussions">Discussions</a></li>
-                            </ul>
-                        </li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}#contributions">Contributions</a></li>
-                    {% elif request.user.is_lecturer %}
-                        <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}">My courses</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}">Assignments</a></li>
-                        <li class="nav-item dropdown">
-                            <button class="nav-link dropdown-toggle" type="button" id="lecturerWorkspaceMenu" data-bs-toggle="dropdown" aria-expanded="false">Groups</button>
-                            <ul class="dropdown-menu" aria-labelledby="lecturerWorkspaceMenu">
-                                <li><a class="dropdown-item" href="{% url 'group_list' %}">Group workspaces</a></li>
-                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=documents">Documents</a></li>
-                                <li><a class="dropdown-item" href="{% url 'group_list' %}?section=discussions">Discussions</a></li>
-                            </ul>
-                        </li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=progress">Progress</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'submission_list' %}">Submissions &amp; feedback</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}">Reports</a></li>
-                    {% elif request.user.is_admin_role or request.user.is_superuser %}
-                        <li class="nav-item"><a class="nav-link" href="{% url 'admin:index' %}">Users &amp; administration</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}">Courses</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'academic_calendar' %}">Academic sessions</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=admin_activity">Activity logs</a></li>
-                        <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}">Reports</a></li>
-                    {% endif %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{% url 'notifications' %}">
+<header class="portal-header">
+    <div class="portal-topbar">
+        <div class="container d-flex align-items-center justify-content-between gap-3">
+            <a class="portal-brand" href="{% url 'dashboard' %}" translate="no">
+                <span class="portal-brand__mark" aria-hidden="true">SG</span>
+                <span class="portal-brand__text">
+                    <strong>SGAMS</strong>
+                    <span>Group Assignment Workspace</span>
+                </span>
+            </a>
+            {% if request.user.is_authenticated %}
+                <div class="portal-account">
+                    <span class="portal-account__avatar" aria-hidden="true">{{ request.user.username|slice:":1"|upper }}</span>
+                    <span class="portal-account__identity">
+                        <strong>{{ request.user.get_full_name|default:request.user.username }}</strong>
+                        <span>{{ request.user.get_role_display }}</span>
+                    </span>
+                    <a class="portal-account__profile" href="{% url 'profile' %}">Profile</a>
+                    <form method="post" action="{% url 'logout' %}" class="m-0">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-outline-light" type="submit">Log out</button>
+                    </form>
+                </div>
+            {% else %}
+                <span class="portal-affiliation">University of Lusaka</span>
+            {% endif %}
+        </div>
+    </div>
+    {% if request.user.is_authenticated %}
+        <nav class="portal-navigation navbar navbar-expand-xl" aria-label="Primary navigation">
+            <div class="container">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#primaryNavigation" aria-controls="primaryNavigation" aria-expanded="false" aria-label="Toggle primary navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="primaryNavigation">
+                    <ul class="navbar-nav">
+                        <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}" {% if request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>Overview</a></li>
+                        {% if request.user.is_student %}
+                            <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}" {% if request.resolver_match.url_name == 'course_list' or request.resolver_match.url_name == 'course_detail' %}aria-current="page"{% endif %}>My Courses</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}" {% if request.resolver_match.url_name == 'assignment_list' or request.resolver_match.url_name == 'assignment_detail' %}aria-current="page"{% endif %}>Assignments</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'group_list' %}" {% if request.resolver_match.url_name == 'group_list' or request.resolver_match.url_name == 'group_detail' %}aria-current="page"{% endif %}>My Groups</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'task_list' %}?scope=mine" {% if request.resolver_match.url_name == 'task_list' and request.GET.scope != 'group' %}aria-current="page"{% endif %}>My Tasks</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'task_list' %}?scope=group" {% if request.resolver_match.url_name == 'task_list' and request.GET.scope == 'group' %}aria-current="page"{% endif %}>Group Tasks</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'dashboard' %}#contributions">Contributions</a></li>
+                        {% elif request.user.is_lecturer %}
+                            <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}" {% if request.resolver_match.url_name == 'course_list' or request.resolver_match.url_name == 'course_detail' %}aria-current="page"{% endif %}>My Courses</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}" {% if request.resolver_match.url_name == 'assignment_list' or request.resolver_match.url_name == 'assignment_detail' %}aria-current="page"{% endif %}>Assignments</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'group_list' %}" {% if request.resolver_match.url_name == 'group_list' or request.resolver_match.url_name == 'group_detail' %}aria-current="page"{% endif %}>Groups</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'task_list' %}" {% if request.resolver_match.url_name == 'task_list' or request.resolver_match.url_name == 'task_detail' %}aria-current="page"{% endif %}>Tasks</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=progress">Progress</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'submission_list' %}" {% if request.resolver_match.url_name == 'submission_list' %}aria-current="page"{% endif %}>Submissions</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}" {% if request.resolver_match.url_name == 'reports' %}aria-current="page"{% endif %}>Reports</a></li>
+                        {% elif request.user.is_admin_role or request.user.is_superuser %}
+                            <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}" {% if request.resolver_match.url_name == 'course_list' or request.resolver_match.url_name == 'course_detail' %}aria-current="page"{% endif %}>Courses</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}" {% if request.resolver_match.url_name == 'assignment_list' or request.resolver_match.url_name == 'assignment_detail' %}aria-current="page"{% endif %}>Assignments</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'group_list' %}" {% if request.resolver_match.url_name == 'group_list' or request.resolver_match.url_name == 'group_detail' %}aria-current="page"{% endif %}>Groups</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'task_list' %}" {% if request.resolver_match.url_name == 'task_list' or request.resolver_match.url_name == 'task_detail' %}aria-current="page"{% endif %}>Tasks</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'admin:index' %}">Administration</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'academic_calendar' %}" {% if request.resolver_match.url_name == 'academic_calendar' %}aria-current="page"{% endif %}>Academic Calendar</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=admin_activity">Activity Logs</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}" {% if request.resolver_match.url_name == 'reports' %}aria-current="page"{% endif %}>Reports</a></li>
+                        {% endif %}
+                        <li class="nav-item"><a class="nav-link" href="{% url 'notifications' %}" {% if request.resolver_match.url_name == 'notifications' %}aria-current="page"{% endif %}>
                             Notifications
                             {% if unread_notification_count %}<span class="badge rounded-pill text-bg-warning">{{ unread_notification_count }}</span>{% endif %}
-                        </a>
-                    </li>
-                    <li class="nav-item"><a class="nav-link" href="{% url 'profile' %}">Profile</a></li>
-                </ul>
-                <span class="navbar-text text-white-50 me-lg-3">{{ request.user.username }} ({{ request.user.get_role_display }})</span>
-                <form method="post" action="{% url 'logout' %}" class="d-inline-block my-2 my-lg-0">
-                    {% csrf_token %}
-                    <button class="btn btn-outline-light btn-sm" type="submit">Log out</button>
-                </form>
+                        </a></li>
+                    </ul>
+                </div>
             </div>
-        {% endif %}
-    </div>
-</nav>
+        </nav>
+    {% endif %}
+</header>
 
 <main class="container app-main pb-5" id="main-content" tabindex="-1">
     {% for message in messages %}
@@ -86,7 +97,10 @@
 </main>
 
 <footer class="container pb-4">
-    <small>University of Lusaka · Student Group Assignment Management System (complements Moodle; it is not an LMS replacement).</small>
+    <div class="portal-footer">
+        <span>SGAMS · Student Group Assignment Management System</span>
+        <span>University of Lusaka · Complements the university LMS</span>
+    </div>
 </footer>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

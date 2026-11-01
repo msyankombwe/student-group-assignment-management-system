@@ -1,25 +1,31 @@
 {% extends "core/base.html" %}
 {% block title %}Dashboard · UNILUS SGAMS{% endblock %}
 {% block content %}
-<header class="page-heading d-flex flex-wrap justify-content-between align-items-center gap-2">
-    <div>
-        <h1 class="h3 mb-1">{{ dashboard_role|title }} dashboard</h1>
-        <p class="text-secondary mb-0">Welcome, {{ request.user.get_full_name|default:request.user.username }}.</p>
+<header class="portal-hero">
+    <div class="portal-hero__content">
+        <p class="portal-hero__eyebrow">Student Group Assignment Management System</p>
+        <h1 class="h2">{{ dashboard_role|title }} dashboard</h1>
+        <p>Welcome, {{ request.user.get_full_name|default:request.user.username }}. Keep courses, group work, and assignment progress in one place.</p>
     </div>
     {% if dashboard_role == "administrator" %}
-    <div class="d-flex flex-wrap gap-2">
-        <a class="btn btn-primary" href="{% url 'course_create' %}">New course</a>
-        <a class="btn btn-outline-primary" href="{% url 'assignment_create' %}">New assignment</a>
-        <a class="btn btn-outline-primary" href="{% url 'group_create' %}">New group</a>
-        <a class="btn btn-outline-secondary" href="{% url 'contribution_report' %}">Contribution report</a>
-        <a class="btn btn-outline-secondary" href="{% url 'reports' %}">Reports &amp; analytics</a>
+    <div class="portal-hero__actions d-flex flex-wrap gap-2">
+        <a class="btn btn-primary" href="{% url 'course_create' %}">New Course</a>
+        <a class="btn btn-outline-light" href="{% url 'assignment_create' %}">New Assignment</a>
+        <a class="btn btn-outline-light" href="{% url 'group_create' %}">New Group</a>
+        <a class="btn btn-outline-light" href="{% url 'reports' %}">Reports</a>
     </div>
     {% elif dashboard_role == "lecturer" %}
-    <div class="d-flex flex-wrap gap-2">
-        <a class="btn btn-primary" href="{% url 'assignment_create' %}">New assignment</a>
-        <a class="btn btn-outline-primary" href="{% url 'group_create' %}">New group</a>
-        <a class="btn btn-outline-secondary" href="{% url 'contribution_report' %}">Contribution report</a>
-        <a class="btn btn-outline-secondary" href="{% url 'reports' %}">Reports &amp; analytics</a>
+    <div class="portal-hero__actions d-flex flex-wrap gap-2">
+        <a class="btn btn-primary" href="{% url 'assignment_create' %}">New Assignment</a>
+        <a class="btn btn-outline-light" href="{% url 'course_list' %}">Managed Courses</a>
+        <a class="btn btn-outline-light" href="{% url 'group_list' %}">Monitor Groups</a>
+        <a class="btn btn-outline-light" href="{% url 'submission_list' %}">Review Submissions</a>
+        <a class="btn btn-outline-light" href="{% url 'reports' %}?type=contribution">Participation</a>
+    </div>
+    {% else %}
+    <div class="portal-hero__actions d-flex flex-wrap gap-2">
+        <a class="btn btn-primary" href="{% url 'course_list' %}">Browse My Courses</a>
+        <a class="btn btn-outline-light" href="{% url 'task_list' %}?scope=mine">View My Tasks</a>
     </div>
     {% endif %}
 </header>
@@ -35,13 +41,14 @@
         <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Active users</div><div class="stat-value">{{ stats.active_users }}</div></div></div></div>
         <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Activities (30 days)</div><div class="stat-value">{{ stats.recent_activities }}</div></div></div></div>
     {% elif request.user.role == 'lecturer' %}
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Courses</div><div class="stat-value">{{ stats.courses }}</div></div></div></div>
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Assignments</div><div class="stat-value">{{ stats.assignments }}</div></div></div></div>
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Groups</div><div class="stat-value">{{ stats.groups }}</div></div></div></div>
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Submissions</div><div class="stat-value">{{ stats.submissions }}</div></div></div></div>
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Incomplete groups</div><div class="stat-value">{{ stats.incomplete_groups }}</div></div></div></div>
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Groups with overdue tasks</div><div class="stat-value">{{ stats.overdue_groups }}</div></div></div></div>
-        <div class="col-6 col-lg-3"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Outstanding submissions</div><div class="stat-value">{{ stats.outstanding_submissions }}</div></div></div></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'course_list' %}"><div class="card-body"><div class="text-secondary">Managed courses</div><div class="stat-value">{{ stats.courses }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'assignment_list' %}"><div class="card-body"><div class="text-secondary">Assignments</div><div class="stat-value">{{ stats.assignments }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'assignment_list' %}"><div class="card-body"><div class="text-secondary">Active assignments</div><div class="stat-value">{{ stats.active_assignments }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'group_list' %}"><div class="card-body"><div class="text-secondary">Groups monitored</div><div class="stat-value">{{ stats.groups }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'submission_list' %}"><div class="card-body"><div class="text-secondary">Submissions received</div><div class="stat-value">{{ stats.submissions }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'reports' %}?type=progress"><div class="card-body"><div class="text-secondary">Incomplete groups</div><div class="stat-value">{{ stats.incomplete_groups }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'task_list' %}"><div class="card-body"><div class="text-secondary">Groups with overdue tasks</div><div class="stat-value">{{ stats.overdue_groups }}</div></div></a></div>
+        <div class="col-6 col-lg-3"><a class="card card-stat shadow-sm h-100 text-decoration-none" href="{% url 'submission_list' %}"><div class="card-body"><div class="text-secondary">Outstanding submissions</div><div class="stat-value">{{ stats.outstanding_submissions }}</div></div></a></div>
     {% else %}
         <div class="col-6 col-lg-4"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Enrolled courses</div><div class="stat-value">{{ stats.courses }}</div></div></div></div>
         <div class="col-6 col-lg-4"><div class="card card-stat shadow-sm h-100"><div class="card-body"><div class="text-secondary">Active assignments</div><div class="stat-value">{{ stats.active_assignments }}</div></div></div></div>
@@ -93,30 +100,43 @@
     <div class="col-lg-7">
         <section class="card shadow-sm h-100">
             <div class="card-body">
-                <h2 class="h5">Courses &amp; assignments</h2>
+                <div class="section-heading">
+                    <div>
+                        <h2 class="h5">{% if dashboard_role == "lecturer" %}Managed Courses{% else %}Course Overview{% endif %}</h2>
+                        <p>{% if dashboard_role == "lecturer" %}Courses and assignment workspaces within your teaching scope.{% else %}Your courses and their assignment spaces.{% endif %}</p>
+                    </div>
+                    <a class="btn btn-sm btn-outline-primary" href="{% url 'course_list' %}">All Courses</a>
+                </div>
                 {% for course in courses %}
-                    <h3 class="h6 mt-3">
-                        <a href="{% url 'course_detail' course.pk %}">{{ course.code|default:course.name }}</a>
-                        · {{ course.semester }} {{ course.academic_year }}
-                    </h3>
-                    <ul class="list-unstyled ms-1">
+                    <article class="dashboard-course">
+                        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                            <div>
+                                <h3 class="h6 mb-1"><a href="{% url 'course_detail' course.pk %}">{{ course.code|default:course.name }}</a></h3>
+                                <p class="small text-secondary mb-0">{{ course.name }} · {{ course.semester }} {{ course.academic_year }}</p>
+                            </div>
+                            {% if course.is_active %}<span class="badge text-bg-success">Active</span>{% endif %}
+                        </div>
                         {% for assignment in course.assignments.all %}
-                            <li class="mb-2">
+                            <div class="dashboard-course__assignment">
                                 <a href="{% url 'assignment_detail' assignment.pk %}"><strong>{{ assignment.title }}</strong></a>
                                 <span class="badge text-bg-secondary badge-status">{{ assignment.get_status_display }}</span>
-                                — due {{ assignment.deadline|date:"M j, Y H:i" }}
-                                <ul>
-                                    {% if dashboard_role != "student" %}
+                                <span class="small text-secondary">Due {{ assignment.deadline|date:"M j, Y H:i" }}</span>
+                                {% if dashboard_role != "student" %}
+                                    <div class="d-flex flex-wrap gap-2 mt-2">
                                         {% for group in assignment.groups.all %}
-                                            <li><a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a></li>
-                                        {% empty %}<li class="text-secondary">No groups yet.</li>{% endfor %}
-                                    {% endif %}
-                                </ul>
-                            </li>
-                        {% empty %}<li class="text-secondary">No assignments yet.</li>{% endfor %}
-                    </ul>
+                                            <a class="badge text-bg-light text-decoration-none" href="{% url 'group_detail' group.pk %}">{{ group.name }}</a>
+                                        {% empty %}<span class="small text-secondary">No groups yet.</span>{% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% empty %}<p class="small text-secondary mt-2 mb-0">No assignments yet.</p>{% endfor %}
+                    </article>
                 {% empty %}
-                    <p class="text-secondary mb-0">No courses available yet.</p>
+                    <div class="empty-panel">
+                        <span class="empty-panel__mark" aria-hidden="true">C</span>
+                        <h3 class="h5">No courses available</h3>
+                        <p class="text-secondary mb-0">Courses will appear here when they are available to your account.</p>
+                    </div>
                 {% endfor %}
             </div>
         </section>
@@ -124,15 +144,23 @@
     <div class="col-lg-5">
         <section class="card shadow-sm mb-3">
             <div class="card-body">
-                <h2 class="h5">Tasks</h2>
+                <div class="section-heading">
+                    <div>
+                        <h2 class="h5">{% if dashboard_role == "lecturer" %}Group Task Monitoring{% else %}Task Activity{% endif %}</h2>
+                        <p>{% if dashboard_role == "student" %}Your responsibilities and group progress.{% else %}Recent work across your authorised groups.{% endif %}</p>
+                    </div>
+                    <a class="btn btn-sm btn-outline-primary" href="{% url 'task_list' %}{% if dashboard_role == 'student' %}?scope=group{% endif %}">All Tasks</a>
+                </div>
                 <ul class="list-group list-group-flush">
                     {% for task in tasks %}
-                        <li class="list-group-item px-0">
-                            <a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a>
-                            <div class="small text-secondary">
+                        <li class="list-group-item px-0 dashboard-task">
+                            <a class="dashboard-task__title" href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a>
+                            <div class="small text-secondary mt-1">
                                 <span class="badge {% if task.is_overdue %}text-bg-danger{% elif task.status == 'completed' %}text-bg-success{% elif task.status == 'under_review' %}text-bg-info{% elif task.status == 'in_progress' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ task.effective_status_display }}</span>
-                                · {{ task.group.name }} · {{ task.assigned_to.get_full_name|default:task.assigned_to.username }}
-                                · {{ task.get_priority_display }} priority · due {{ task.deadline|date:"M j, Y H:i" }}
+                                <span>{{ task.group.name }}</span>
+                                <span>{% if dashboard_role == "student" and task.assigned_to_id == request.user.id %}<strong class="text-primary">Assigned to me</strong>{% else %}{{ task.assigned_to.get_full_name|default:task.assigned_to.username }}{% endif %}</span>
+                                <span>{{ task.get_priority_display }} priority</span>
+                                <span>Due {{ task.deadline|date:"M j, Y H:i" }}</span>
                             </div>
                         </li>
                     {% empty %}
@@ -196,7 +224,10 @@
 
 <section class="card shadow-sm mt-3">
     <div class="card-body">
-        <h2 class="h5">{% if dashboard_role == "student" %}My groups{% else %}Groups and formation status{% endif %}</h2>
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h2 class="h5 mb-0">{% if dashboard_role == "student" %}My groups{% elif dashboard_role == "lecturer" %}Group monitoring{% else %}Groups and formation status{% endif %}</h2>
+            {% if dashboard_role == "lecturer" %}<a class="btn btn-sm btn-outline-primary" href="{% url 'group_list' %}">All managed groups</a>{% endif %}
+        </div>
         <div class="row g-3">
             {% for group in groups %}
                 <div class="col-md-6">
@@ -251,10 +282,11 @@
         <ul class="mb-0">
             {% for submission in submissions %}
                 <li>
-                    <a href="{% url 'submission_receipt' submission.pk %}">{{ submission.assignment.title }} · {{ submission.group.name }}</a>
+                    <a href="{% if dashboard_role == 'lecturer' %}{% url 'group_detail' submission.group_id %}{% else %}{% url 'submission_receipt' submission.pk %}{% endif %}">{{ submission.assignment.title }} · {{ submission.group.name }}</a>
                     — <span class="badge {% if submission.status == 'feedback_published' %}text-bg-success{% elif submission.is_late %}text-bg-warning{% elif submission.status == 'under_review' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">{{ submission.get_status_display }}</span>
                     · {{ submission.submitted_at|date:"M j, Y H:i" }}
                     {% if submission.is_late %}<span class="badge text-bg-warning">Late</span>{% endif %}
+                    {% if dashboard_role == "lecturer" %}<a class="btn btn-sm btn-outline-primary ms-1" href="{% url 'group_detail' submission.group_id %}">Review &amp; grade</a>{% endif %}
                 </li>
             {% empty %}<li class="text-secondary">No submissions yet.</li>{% endfor %}
         </ul>

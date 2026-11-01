@@ -51,35 +51,157 @@ h6 {
     color: var(--unilus-muted) !important;
 }
 
-.navbar {
+.portal-topbar {
+    color: #fff;
     background: var(--unilus-navy);
     border-bottom: 3px solid var(--unilus-gold);
 }
 
-.navbar-brand,
-.navbar-nav .nav-link {
-    color: #fff !important;
+.portal-topbar > .container {
+    min-height: 5.25rem;
 }
 
-.navbar-brand {
-    letter-spacing: .015em;
+.portal-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: .75rem;
+    color: #fff;
+    text-decoration: none;
 }
 
-.navbar .nav-link {
-    border-radius: .375rem;
+.portal-brand:hover {
+    color: #fff;
+    text-decoration: none;
 }
 
-.navbar .nav-link:hover,
-.navbar .nav-link[aria-current="page"],
-.navbar .nav-link.show,
-.navbar .dropdown-item:hover {
-    color: #fff !important;
-    background-color: rgba(255, 255, 255, .13);
+.portal-brand__mark {
+    display: grid;
+    width: 2.8rem;
+    height: 2.8rem;
+    place-items: center;
+    color: var(--unilus-navy);
+    background: var(--unilus-gold);
+    border-radius: .7rem;
+    font-size: .95rem;
+    font-weight: 800;
+    letter-spacing: .04em;
 }
 
-.navbar .dropdown-menu {
+.portal-brand__text,
+.portal-account__identity {
+    display: grid;
+    line-height: 1.25;
+}
+
+.portal-brand__text strong {
+    font-size: 1.2rem;
+    letter-spacing: .08em;
+}
+
+.portal-brand__text > span {
+    color: rgba(255, 255, 255, .75);
+    font-size: .75rem;
+}
+
+.portal-affiliation {
+    color: rgba(255, 255, 255, .8);
+    font-size: .9rem;
+}
+
+.portal-account {
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+}
+
+.portal-account__avatar {
+    display: grid;
+    width: 2.45rem;
+    height: 2.45rem;
+    place-items: center;
+    color: var(--unilus-navy);
+    background: #e7eef5;
+    border-radius: 50%;
+    font-weight: 700;
+}
+
+.portal-account__identity {
+    max-width: 13rem;
+    overflow: hidden;
+    color: #fff;
+    font-size: .86rem;
+}
+
+.portal-account__identity strong,
+.portal-account__identity > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.portal-account__identity > span {
+    color: rgba(255, 255, 255, .72);
+    font-size: .75rem;
+}
+
+.portal-account__profile {
+    margin-left: .35rem;
+    color: #fff;
+    font-size: .85rem;
+}
+
+.portal-navigation {
+    padding: 0;
+    background: #fff;
+    border-bottom: 1px solid var(--unilus-border);
+    box-shadow: 0 .15rem .65rem rgba(11, 42, 74, .05);
+}
+
+.portal-navigation .navbar-collapse {
+    min-height: 3.35rem;
+}
+
+.portal-navigation .navbar-nav {
+    align-items: center;
+    gap: .2rem;
+}
+
+.portal-navigation .nav-link {
+    min-height: 3.35rem;
+    display: flex;
+    align-items: center;
+    padding: .6rem .8rem;
+    color: #354b60;
+    border-bottom: 3px solid transparent;
+    font-size: .9rem;
+    font-weight: 600;
+}
+
+.portal-navigation .nav-link:hover,
+.portal-navigation .nav-link[aria-current="page"] {
+    color: var(--unilus-navy);
+    background: #f5f8fb;
+    border-bottom-color: var(--unilus-gold);
+}
+
+.portal-navigation .navbar-toggler {
+    margin: .45rem 0;
     border-color: var(--unilus-border);
-    box-shadow: 0 .5rem 1.5rem rgba(11, 42, 74, .16);
+}
+
+.portal-navigation .navbar-toggler-icon {
+    filter: brightness(.35);
+}
+
+.portal-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: .5rem 1.25rem;
+    padding-top: 1rem;
+    color: var(--unilus-muted);
+    border-top: 1px solid var(--unilus-border);
+    font-size: .8rem;
 }
 
 .skip-link {
@@ -106,6 +228,7 @@ h6 {
 
 .app-main {
     min-height: calc(100vh - 11rem);
+    padding-top: 1.8rem;
 }
 
 .page-heading {
@@ -116,10 +239,142 @@ h6 {
     color: var(--unilus-muted);
 }
 
+.portal-hero {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.25rem;
+    margin-bottom: 1.5rem;
+    padding: clamp(1.25rem, 3vw, 2rem);
+    overflow: hidden;
+    color: #fff;
+    background: linear-gradient(115deg, #0b2a4a 0%, #124b7a 68%, #1b607d 100%);
+    border-radius: .9rem;
+    box-shadow: 0 .6rem 1.5rem rgba(11, 42, 74, .12);
+}
+
+.portal-hero::after {
+    position: absolute;
+    right: -3rem;
+    bottom: -7rem;
+    width: 18rem;
+    height: 18rem;
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 50%;
+    box-shadow: 0 0 0 2.5rem rgba(255, 255, 255, .035), 0 0 0 5rem rgba(255, 255, 255, .025);
+    content: "";
+    pointer-events: none;
+}
+
+.portal-hero__content,
+.portal-hero__actions {
+    position: relative;
+    z-index: 1;
+}
+
+.portal-hero h1 {
+    margin-bottom: .35rem;
+    color: #fff;
+}
+
+.portal-hero p {
+    max-width: 44rem;
+    margin-bottom: 0;
+    color: rgba(255, 255, 255, .82);
+}
+
+.portal-hero__eyebrow {
+    margin-bottom: .45rem !important;
+    color: #f1d88a !important;
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.portal-hero__actions .btn-primary {
+    --bs-btn-color: var(--unilus-navy);
+    --bs-btn-bg: #f0d47a;
+    --bs-btn-border-color: #f0d47a;
+    --bs-btn-hover-color: var(--unilus-navy);
+    --bs-btn-hover-bg: #ffe49a;
+    --bs-btn-hover-border-color: #ffe49a;
+}
+
+.section-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: space-between;
+    gap: .75rem;
+    margin-bottom: 1rem;
+}
+
+.section-heading h2 {
+    margin-bottom: .2rem;
+}
+
+.section-heading p {
+    margin-bottom: 0;
+    color: var(--unilus-muted);
+    font-size: .9rem;
+}
+
+.dashboard-course {
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--unilus-border);
+}
+
+.dashboard-course:first-of-type {
+    padding-top: 0;
+}
+
+.dashboard-course:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.dashboard-course__assignment {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .45rem .6rem;
+    margin-top: .75rem;
+    padding: .7rem .8rem;
+    background: #f7f9fc;
+    border-left: 3px solid #d5bd71;
+    border-radius: 0 .4rem .4rem 0;
+}
+
+.dashboard-course__assignment > a:first-child {
+    min-width: 10rem;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-task .dashboard-task__title {
+    color: var(--unilus-navy);
+    font-weight: 650;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-task > div {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .35rem .65rem;
+}
+
+.dashboard-task > div .badge {
+    flex: 0 0 auto;
+}
+
 .card {
     background-color: var(--unilus-surface);
     border-color: var(--unilus-border);
     border-radius: .75rem;
+    box-shadow: 0 .15rem .65rem rgba(11, 42, 74, .045);
 }
 
 .card-header {
@@ -130,6 +385,144 @@ h6 {
 
 .card-stat {
     border-top: 3px solid var(--unilus-gold);
+}
+
+.card-stat .card-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 6rem;
+}
+
+.course-card {
+    overflow: hidden;
+    transition: transform .18s ease, box-shadow .18s ease;
+}
+
+.course-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 .7rem 1.6rem rgba(11, 42, 74, .12);
+}
+
+.course-card__visual {
+    position: relative;
+    display: flex;
+    min-height: 7.5rem;
+    align-items: end;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: 1.15rem 1.25rem;
+    overflow: hidden;
+    color: #fff;
+    background: linear-gradient(125deg, #0b2a4a, #1a5b79);
+}
+
+.course-card__visual::after {
+    position: absolute;
+    top: -3.4rem;
+    right: -1.5rem;
+    width: 10rem;
+    height: 10rem;
+    border: 1px solid rgba(255, 255, 255, .18);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1.5rem rgba(255, 255, 255, .04), 0 0 0 3rem rgba(255, 255, 255, .035);
+    content: "";
+    pointer-events: none;
+}
+
+.course-card__code,
+.course-card__term {
+    position: relative;
+    z-index: 1;
+}
+
+.course-card__code {
+    max-width: 72%;
+    overflow-wrap: anywhere;
+    color: #fff;
+    font-size: clamp(1.15rem, 3vw, 1.65rem);
+    font-weight: 750;
+    letter-spacing: .04em;
+}
+
+.course-card__term {
+    flex: 0 0 auto;
+    padding: .25rem .55rem;
+    color: #fff;
+    background: rgba(255, 255, 255, .14);
+    border: 1px solid rgba(255, 255, 255, .24);
+    border-radius: 99px;
+    font-size: .74rem;
+}
+
+.course-card__body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    padding: 1.15rem 1.25rem 1.25rem;
+}
+
+.course-card__body h2 {
+    margin-bottom: .4rem;
+    overflow-wrap: anywhere;
+}
+
+.course-card__meta {
+    color: var(--unilus-muted);
+    font-size: .88rem;
+}
+
+.course-card__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    margin-top: auto;
+    padding-top: .9rem;
+    border-top: 1px solid var(--unilus-border);
+}
+
+.course-card__footer .btn {
+    flex: 0 0 auto;
+}
+
+.empty-panel {
+    padding: clamp(2rem, 6vw, 4rem) 1.5rem;
+    text-align: center;
+}
+
+.empty-panel__mark {
+    display: grid;
+    width: 3rem;
+    height: 3rem;
+    margin: 0 auto 1rem;
+    place-items: center;
+    color: var(--unilus-navy);
+    background: #eaf0f6;
+    border-radius: 50%;
+    font-weight: 750;
+}
+
+.login-shell {
+    max-width: 35rem;
+    margin: 2.25rem auto;
+}
+
+.login-card {
+    overflow: hidden;
+    border-top: 4px solid var(--unilus-gold);
+}
+
+.login-card .card-body {
+    padding: clamp(1.5rem, 5vw, 2.5rem);
+}
+
+.login-card__eyebrow {
+    color: var(--unilus-muted);
+    font-size: .8rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
 }
 
 .card-stat .stat-value,
@@ -315,19 +708,44 @@ footer {
         --bs-gutter-x: 1.25rem;
     }
 
-    .navbar .navbar-nav {
-        padding-top: .5rem;
+    .portal-topbar > .container {
+        min-height: 4.5rem;
     }
 
-    .navbar .nav-link,
-    .navbar .dropdown-item {
+    .portal-account {
+        gap: .45rem;
+    }
+
+    .portal-account__identity,
+    .portal-account__profile {
+        display: none;
+    }
+
+    .portal-navigation .navbar-collapse {
+        padding-bottom: .5rem;
+    }
+
+    .portal-navigation .navbar-nav {
+        align-items: stretch;
+        padding-top: .25rem;
+    }
+
+    .portal-navigation .nav-link {
         min-height: 2.75rem;
-        display: flex;
-        align-items: center;
+        border-bottom-width: 0;
+        border-left: 3px solid transparent;
+    }
+
+    .portal-navigation .nav-link[aria-current="page"] {
+        border-left-color: var(--unilus-gold);
     }
 
     .page-heading {
         margin-bottom: 1.15rem;
+    }
+
+    .app-main {
+        padding-top: 1.15rem;
     }
 
     .mobile-full-width {

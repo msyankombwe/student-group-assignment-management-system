@@ -13,9 +13,11 @@
         </span>
     </div>
     {% if can_manage %}
-        <div class="d-flex gap-2">
+        <div class="d-flex flex-wrap gap-2">
             <a class="btn btn-outline-primary" href="{% url 'assignment_group_create' assignment.pk %}">Create group</a>
             <a class="btn btn-primary" href="{% url 'assignment_edit' assignment.pk %}">Edit / manage</a>
+            <a class="btn btn-outline-primary" href="{% url 'submission_list' %}?assignment={{ assignment.pk }}">Review submissions</a>
+            <a class="btn btn-outline-secondary" href="{% url 'reports' %}?type=contribution&amp;assignment={{ assignment.pk }}">Participation</a>
             {% if assignment.peer_evaluation_enabled %}
                 <a class="btn btn-outline-secondary" href="{% url 'peer_evaluation_report' assignment.pk %}">Peer evaluation report</a>
             {% endif %}

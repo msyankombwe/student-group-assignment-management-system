@@ -21,9 +21,12 @@
             <small class="text-secondary">Task completion based on recorded task statuses.</small>
         {% endif %}
     </div>
-    <div class="btn-group">
+    <div class="d-flex flex-wrap gap-2">
         {% if can_manage or can_view_private %}
-            <a class="btn btn-primary" href="{% url 'task_create' group.pk %}">Create task</a>
+            <a class="btn btn-primary" href="{% url 'task_create' group.pk %}">Create &amp; assign task</a>
+        {% endif %}
+        {% if can_manage %}
+            <a class="btn btn-outline-primary" href="{% url 'reports' %}?type=contribution&amp;group={{ group.pk }}">Review participation</a>
         {% endif %}
         {% if request.user.role == "student" and can_view_private %}
             <a class="btn btn-outline-primary" href="{% url 'peer_review_create' group.assignment_id %}">Peer review</a>
@@ -158,12 +161,25 @@
         {% if can_view_private %}
         <section id="tasks" class="card shadow-sm mb-3">
             <div class="card-body">
-                <h2 class="h5">Tasks</h2>
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <div>
+                        <h2 class="h5 mb-1">Group Tasks</h2>
+                        <p class="small text-secondary mb-0">Each task identifies the group member responsible for completing it.</p>
+                    </div>
+                    {% if can_manage or can_view_private %}
+                        <a class="btn btn-sm btn-outline-primary" href="{% url 'task_create' group.pk %}">Create &amp; assign task</a>
+                    {% endif %}
+                </div>
                 <ul class="mb-0">
                     {% for task in tasks %}
                         <li>
                             <a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a>
-                            — {{ task.effective_status_display }} · {{ task.assigned_to.username }}
+                            — {{ task.effective_status_display }} ·
+                            {% if request.user.is_student and task.assigned_to_id == request.user.id %}
+                                <strong class="text-primary">Assigned to me ({{ task.assigned_to.username }})</strong>
+                            {% else %}
+                                assigned to {{ task.assigned_to.username }}
+                            {% endif %}
                             · {{ task.get_priority_display }} priority
                             · due {{ task.deadline|date:"M j, Y H:i" }}
                             {% if task.completed_at %}<span class="small text-secondary">completed {{ task.completed_at|date:"M j, H:i" }}</span>{% endif %}

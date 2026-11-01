@@ -4,9 +4,27 @@
 <header class="page-heading d-flex flex-wrap justify-content-between align-items-end gap-3">
     <div>
         <p class="text-uppercase small fw-semibold text-secondary mb-1">Work planning</p>
-        <h1 class="h2 mb-1">{% if request.user.is_student %}Group tasks{% else %}Task monitoring{% endif %}</h1>
-        <p class="mb-0">{% if request.user.is_student %}Tasks from your approved group workspaces.{% else %}Tasks in groups within your authorised scope.{% endif %}</p>
+        <h1 class="h2 mb-1">
+            {% if request.user.is_student %}
+                {% if scope == 'mine' %}My Tasks{% else %}Group Tasks{% endif %}
+            {% else %}Task monitoring{% endif %}
+        </h1>
+        <p class="mb-0">
+            {% if request.user.is_student %}
+                {% if scope == 'mine' %}Your individual responsibilities across approved groups.{% else %}All responsibilities in your approved groups; tasks marked “Assigned to me” are yours to complete.{% endif %}
+            {% else %}Tasks in groups within your authorised scope.{% endif %}
+        </p>
     </div>
+    {% if request.user.is_student %}
+        <nav class="btn-group" aria-label="Task scope">
+            <a class="btn {% if scope == 'mine' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{% url 'task_list' %}?scope=mine" {% if scope == 'mine' %}aria-current="page"{% endif %}>
+                My Tasks <span class="badge text-bg-light">{{ my_task_count }}</span>
+            </a>
+            <a class="btn {% if scope == 'group' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{% url 'task_list' %}?scope=group" {% if scope == 'group' %}aria-current="page"{% endif %}>
+                Group Tasks <span class="badge text-bg-light">{{ group_task_count }}</span>
+            </a>
+        </nav>
+    {% endif %}
 </header>
 
 <section class="card shadow-sm">
@@ -21,7 +39,16 @@
                         <th scope="row"><a href="{% url 'task_detail' task.pk %}">{{ task.title|default:task.description|truncatechars:75 }}</a></th>
                         <td>{{ task.group.assignment.course.code|default:task.group.assignment.course.name }}<br><span class="small text-secondary">{{ task.group.assignment.title }}</span></td>
                         <td><a href="{% url 'group_detail' task.group_id %}">{{ task.group.name }}</a></td>
-                        <td>{{ task.assigned_to.get_full_name|default:task.assigned_to.username }}</td>
+                        <td>
+                            {{ task.assigned_to.get_full_name|default:task.assigned_to.username }}
+                            {% if request.user.is_student %}
+                                {% if task.assigned_to_id == request.user.id %}
+                                    <span class="badge text-bg-primary">Assigned to me</span>
+                                {% else %}
+                                    <span class="badge text-bg-light">Group member</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
                         <td><span class="badge {% if task.priority == 'urgent' %}text-bg-danger{% elif task.priority == 'high' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ task.get_priority_display }}</span></td>
                         <td class="tabular-nums">{% if task.deadline %}{{ task.deadline|date:"M j, Y H:i" }}{% else %}Not set{% endif %}</td>
                         <td>
@@ -29,7 +56,13 @@
                         </td>
                     </tr>
                 {% empty %}
-                    <tr><td class="empty-state" colspan="7">No tasks are available in your authorised groups.</td></tr>
+                    <tr>
+                        <td class="empty-state" colspan="7">
+                            {% if request.user.is_student and scope == 'mine' %}
+                                No tasks are currently assigned to you. View <a href="{% url 'task_list' %}?scope=group">Group Tasks</a> to see what your group members are working on.
+                            {% else %}No tasks are available in your authorised groups.{% endif %}
+                        </td>
+                    </tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -37,9 +70,9 @@
     {% if page_obj.has_other_pages %}
         <nav class="p-3" aria-label="Task pages">
             <ul class="pagination pagination-sm mb-0">
-                {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a></li>{% endif %}
+                {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?{% if request.user.is_student %}scope={{ scope }}&amp;{% endif %}page={{ page_obj.previous_page_number }}">Previous</a></li>{% endif %}
                 <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
-                {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+                {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?{% if request.user.is_student %}scope={{ scope }}&amp;{% endif %}page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
             </ul>
         </nav>
     {% endif %}

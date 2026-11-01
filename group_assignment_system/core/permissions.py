@@ -2,7 +2,7 @@ from django.contrib.auth.backends import BaseBackend
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 from .models import Assignment, Course, Group, Task, TaskUpdate, User
-from .services import user_manages_assignment, user_manages_course
+from .services import user_is_group_member, user_manages_assignment, user_manages_course
 
 
 def is_system_administrator(user):
@@ -41,6 +41,43 @@ class ScopedRolePermission(BasePermission):
             return user_manages_assignment(request.user, obj.group.assignment)
         if isinstance(obj, TaskUpdate):
             return user_manages_assignment(request.user, obj.task.group.assignment)
+        return False
+
+
+class TaskManagementPermission(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated or not user.is_active:
+            return False
+        if user.role not in {choice[0] for choice in User.ROLE_CHOICES} and not user.is_superuser:
+            return False
+        if request.method in SAFE_METHODS or is_system_administrator(user):
+            return True
+        if user.is_lecturer():
+            return True
+        return (
+            user.is_student()
+            and getattr(view, 'action', None)
+            in getattr(view, 'student_write_actions', ())
+        )
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS or is_system_administrator(request.user):
+            return True
+        if isinstance(obj, TaskUpdate):
+            task = obj.task
+        elif isinstance(obj, Task):
+            task = obj
+        else:
+            return False
+        if request.user.is_lecturer():
+            return user_manages_assignment(request.user, task.group.assignment)
+        if request.user.is_student():
+            return (
+                getattr(view, 'action', None)
+                in getattr(view, 'student_write_actions', ())
+                and user_is_group_member(request.user, task.group)
+            )
         return False
 
 
