@@ -105,6 +105,21 @@ class AcademicSession(models.Model):
     end_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
+    def clean(self):
+        super().clean()
+        if not self.start_date:
+            raise ValidationError({'start_date': 'Enter the academic year start date.'})
+        if not self.end_date:
+            raise ValidationError({'end_date': 'Enter the academic year end date.'})
+        if self.end_date < self.start_date:
+            raise ValidationError({
+                'end_date': 'The academic year must end after it starts.',
+            })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
@@ -123,22 +138,54 @@ class Semester(models.Model):
     class Meta:
         unique_together = ('name', 'academic_session')
 
+    def clean(self):
+        super().clean()
+        if not self.academic_session_id:
+            raise ValidationError({
+                'academic_session': 'A semester must belong to an academic year.',
+            })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
 
 class Course(models.Model):
+    YEAR_OF_STUDY_CHOICES = [
+        (1, 'Year 1'),
+        (2, 'Year 2'),
+        (3, 'Year 3'),
+        (4, 'Year 4'),
+    ]
+    SEMESTER_CHOICES = [
+        (1, 'Semester 1'),
+        (2, 'Semester 2'),
+    ]
+
     code = models.CharField(max_length=30, blank=True)
     name = models.CharField(max_length=100)
     programme = models.CharField(max_length=120, blank=True)
-    semester = models.CharField(max_length=20)
-    academic_year = models.CharField(max_length=20)
-    semester_record = models.ForeignKey(
+    year_of_study = models.PositiveSmallIntegerField(
+        choices=YEAR_OF_STUDY_CHOICES,
+        null=True,
+        blank=True,
+    )
+    semester = models.PositiveSmallIntegerField(
+        choices=SEMESTER_CHOICES,
+        null=True,
+        blank=True,
+    )
+    legacy_academic_year = models.CharField(max_length=20, blank=True)
+    legacy_semester = models.CharField(max_length=20, blank=True)
+    legacy_semester_record = models.ForeignKey(
         'Semester',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='courses',
+        related_name='+',
     )
     lecturer = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -151,43 +198,47 @@ class Course(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
-        indexes = [models.Index(fields=['code', 'academic_year'])]
+        indexes = [models.Index(fields=['code', 'year_of_study'])]
         constraints = [
             models.UniqueConstraint(
-                fields=['code', 'academic_year'],
+                fields=['code', 'year_of_study', 'semester'],
                 condition=~models.Q(code=''),
-                name='unique_course_code_academic_year',
+                name='unique_course_code_year_semester',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(year_of_study__isnull=True, semester__isnull=True)
+                    | (
+                        models.Q(year_of_study__gte=1, year_of_study__lte=4)
+                        & models.Q(semester__gte=1, semester__lte=2)
+                    )
+                ),
+                name='valid_course_study_classification',
             ),
         ]
 
     def __str__(self):
         label = self.code or self.name
-        return f'{label} ({self.academic_year})'
+        if self.year_of_study and self.semester:
+            return f'{label} (Year {self.year_of_study}, Semester {self.semester})'
+        return label
 
-    @property
-    def academic_session(self):
-        if self.semester_record_id:
-            return self.semester_record.academic_session
-        return None
+    def clean(self):
+        super().clean()
+        if self.year_of_study is None and self.semester is None:
+            if self._state.adding:
+                raise ValidationError(
+                    'Select both a year of study and a semester for every new course.'
+                )
+            return
+        if self.year_of_study is None:
+            raise ValidationError({'year_of_study': 'Select a year of study.'})
+        if self.semester is None:
+            raise ValidationError({'semester': 'Select a semester.'})
 
     def save(self, *args, **kwargs):
-        if self.semester_record_id:
-            semester = Semester.objects.select_related('academic_session').get(
-                pk=self.semester_record_id
-            )
-            self.semester = semester.name
-            if semester.academic_session_id:
-                self.academic_year = semester.academic_session.name
+        self.full_clean()
         super().save(*args, **kwargs)
-        if self.semester and self.academic_year and not self.semester_record_id:
-            session, _ = AcademicSession.objects.get_or_create(name=self.academic_year)
-            semester, _ = Semester.objects.get_or_create(
-                name=self.semester,
-                academic_session=session,
-            )
-            if self.semester_record_id != semester.pk:
-                self.semester_record = semester
-                Course.objects.filter(pk=self.pk).update(semester_record=semester)
 
 
 class CourseLecturer(models.Model):

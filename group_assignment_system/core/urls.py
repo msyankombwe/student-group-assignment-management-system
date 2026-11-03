@@ -58,17 +58,6 @@ urlpatterns = [
     path('courses/new/', views.course_create, name='course_create'),
     path('courses/<int:pk>/', views.course_detail, name='course_detail'),
     path('courses/<int:pk>/edit/', views.course_edit, name='course_edit'),
-    path('academic-calendar/', views.academic_calendar, name='academic_calendar'),
-    path(
-        'academic-calendar/sessions/<int:pk>/edit/',
-        views.academic_session_edit,
-        name='academic_session_edit',
-    ),
-    path(
-        'academic-calendar/semesters/<int:pk>/edit/',
-        views.semester_edit,
-        name='semester_edit',
-    ),
     path('assignments/', views.assignment_list, name='assignment_list'),
     path('assignments/new/', views.assignment_create, name='assignment_create'),
     path('assignments/<int:pk>/', views.assignment_detail, name='assignment_detail'),

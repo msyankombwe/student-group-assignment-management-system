@@ -6,7 +6,6 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from .models import (
-    AcademicSession,
     ActivityLog,
     AdministratorProfile,
     Assignment,
@@ -24,7 +23,6 @@ from .models import (
     LecturerProfile,
     Notification,
     PeerReview,
-    Semester,
     Submission,
     StudentProfile,
     Task,
@@ -33,6 +31,7 @@ from .models import (
     User,
 )
 from .services import log_audit, record_activity
+from .forms import CourseForm
 
 
 class TaskAdminForm(forms.ModelForm):
@@ -69,32 +68,8 @@ class CustomUserCreationForm(UserCreationForm):
         fields = ('username', 'email')
 
 
-class CourseAdminForm(forms.ModelForm):
-    class Meta:
-        model = Course
-        fields = '__all__'
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        lecturers = User.objects.filter(role=User.ROLE_LECTURER, is_active=True)
-        if self.instance.pk and self.instance.lecturer_id:
-            lecturers = (
-                lecturers
-                | User.objects.filter(
-                    pk=self.instance.lecturer_id,
-                    role=User.ROLE_LECTURER,
-                )
-            ).distinct()
-        self.fields['lecturer'].queryset = lecturers
-        semesters = Semester.objects.filter(
-            is_active=True,
-            academic_session__is_active=True,
-        )
-        if self.instance.pk and self.instance.semester_record_id:
-            semesters = (semesters | Semester.objects.filter(
-                pk=self.instance.semester_record_id
-            )).distinct()
-        self.fields['semester_record'].queryset = semesters
+class CourseAdminForm(CourseForm):
+    pass
 
 
 class ContributionActivityAdmin(admin.ModelAdmin):
@@ -183,8 +158,25 @@ class CustomUserAdmin(UserAdmin):
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
     form = CourseAdminForm
-    list_display = ('code', 'name', 'semester', 'academic_year', 'lecturer', 'is_active')
+    list_display = (
+        'code',
+        'name',
+        'study_year',
+        'course_semester',
+        'programme',
+        'lecturer',
+        'is_active',
+    )
+    list_filter = ('year_of_study', 'semester', 'is_active')
     search_fields = ('code', 'name')
+
+    @admin.display(description='Year of study')
+    def study_year(self, course):
+        return course.get_year_of_study_display() or 'Not classified'
+
+    @admin.display(description='Semester')
+    def course_semester(self, course):
+        return course.get_semester_display() or 'Not classified'
 
 
 @admin.register(Assignment)
@@ -257,8 +249,6 @@ class GradeAdmin(admin.ModelAdmin):
     list_display = ('group', 'score', 'max_score', 'is_released', 'graded_by', 'graded_at')
 
 
-admin.site.register(AcademicSession)
-admin.site.register(Semester)
 admin.site.register(CourseLecturer)
 admin.site.register(CourseEnrolment)
 admin.site.register(TaskUpdate)

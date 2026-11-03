@@ -18,11 +18,11 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import ValidationError as APIValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from .forms import (
-    AcademicSessionForm,
     AssignmentForm,
     CourseForm,
     EvidenceUploadForm,
@@ -35,14 +35,12 @@ from .forms import (
     GroupUpdateForm,
     MembershipForm,
     PeerReviewForm,
-    SemesterForm,
     SubmissionForm,
     TaskForm,
     TaskStatusForm,
     TaskUpdateForm,
 )
 from .models import (
-    AcademicSession,
     ActivityLog,
     Assignment,
     AuditLog,
@@ -56,7 +54,6 @@ from .models import (
     Notification,
     PeerReview,
     Submission,
-    Semester,
     Task,
     TaskUpdate,
     User,
@@ -608,7 +605,7 @@ def reports(request):
     selected_assignment = request.GET.get('assignment', '')
     selected_group = request.GET.get('group', '')
     selected_semester = request.GET.get('semester', '')
-    selected_year = request.GET.get('academic_year', '')
+    selected_year = request.GET.get('year_of_study', '')
 
     def valid_filter(value, queryset):
         return value if value.isdecimal() and queryset.filter(pk=value).exists() else ''
@@ -620,11 +617,15 @@ def reports(request):
     )
     if any(value and not valid_filter(value, queryset) for value, queryset in requested_filters):
         return _forbidden(request)
-    if selected_semester and not courses.filter(
-        semester_record__name=selected_semester,
-    ).exists():
+    if selected_semester and (
+        not selected_semester.isdecimal()
+        or int(selected_semester) not in dict(Course.SEMESTER_CHOICES)
+    ):
         return _forbidden(request)
-    if selected_year and not courses.filter(academic_year=selected_year).exists():
+    if selected_year and (
+        not selected_year.isdecimal()
+        or int(selected_year) not in dict(Course.YEAR_OF_STUDY_CHOICES)
+    ):
         return _forbidden(request)
     selected_course = valid_filter(selected_course, courses)
     selected_assignment = valid_filter(selected_assignment, assignments)
@@ -644,16 +645,16 @@ def reports(request):
         courses = courses.filter(assignments__groups__pk=selected_group).distinct()
     if selected_semester:
         scoped_groups = scoped_groups.filter(
-            assignment__course__semester_record__name=selected_semester,
+            assignment__course__semester=int(selected_semester),
         )
-        assignments = assignments.filter(course__semester_record__name=selected_semester)
-        courses = courses.filter(semester_record__name=selected_semester)
+        assignments = assignments.filter(course__semester=int(selected_semester))
+        courses = courses.filter(semester=int(selected_semester))
     if selected_year:
         scoped_groups = scoped_groups.filter(
-            assignment__course__academic_year=selected_year,
+            assignment__course__year_of_study=int(selected_year),
         )
-        assignments = assignments.filter(course__academic_year=selected_year)
-        courses = courses.filter(academic_year=selected_year)
+        assignments = assignments.filter(course__year_of_study=int(selected_year))
+        courses = courses.filter(year_of_study=int(selected_year))
     scoped_groups = scoped_groups.distinct()
     assignments = assignments.distinct()
     title_map = {
@@ -753,14 +754,14 @@ def reports(request):
                     member['activity_count'],
                 ])
     elif report_type == 'course_summary':
-        headers = ['Course', 'Semester', 'Academic year', 'Assignments', 'Groups', 'Submissions', 'Late submissions']
-        for course in courses.select_related('semester_record'):
+        headers = ['Course', 'Year of study', 'Semester', 'Assignments', 'Groups', 'Submissions', 'Late submissions']
+        for course in courses:
             course_assignments = assignments.filter(course=course)
             course_groups = scoped_groups.filter(assignment__course=course)
             rows.append([
                 course.code or course.name,
-                course.semester_record.name if course.semester_record_id else course.semester,
-                course.academic_year,
+                course.get_year_of_study_display() or 'Not classified',
+                course.get_semester_display() or 'Not classified',
                 course_assignments.count(),
                 course_groups.count(),
                 Submission.objects.filter(is_latest=True, group__in=course_groups).count(),
@@ -815,12 +816,8 @@ def reports(request):
     filter_courses = courses.order_by('code', 'name')
     filter_assignments = assignments.select_related('course').order_by('title')
     filter_groups = scoped_groups.order_by('name')
-    semesters = Semester.objects.filter(
-        courses__in=Course.objects.filter(pk__in=filter_courses.values('pk'))
-    ).distinct().order_by('name')
-    academic_years = Course.objects.filter(
-        pk__in=filter_courses.values('pk')
-    ).values_list('academic_year', flat=True).distinct().order_by('academic_year')
+    semesters = Course.SEMESTER_CHOICES
+    years_of_study = Course.YEAR_OF_STUDY_CHOICES
     return render(request, 'core/reports.html', {
         'report_types': [(key, title_map[key]) for key in report_types],
         'report_type': report_type,
@@ -831,7 +828,7 @@ def reports(request):
         'assignments': filter_assignments,
         'groups': filter_groups,
         'semesters': semesters,
-        'academic_years': academic_years,
+        'years_of_study': years_of_study,
         'selected_course': selected_course,
         'selected_assignment': selected_assignment,
         'selected_group': selected_group,
@@ -989,7 +986,10 @@ def course_create(request):
         record_activity(request.user, 'course_created', f'Created course {course.name}')
         messages.success(request, 'Course created.')
         return redirect('course_detail', course.pk)
-    return render(request, 'core/form.html', {'title': 'Create course', 'form': form})
+    return render(request, 'core/course_form.html', {
+        'title': 'Create course',
+        'form': form,
+    })
 
 
 @login_required
@@ -1085,81 +1085,9 @@ def _managed_courses_for(user):
 
 
 @login_required
-def academic_calendar(request):
-    if not request.user.is_admin_role():
-        return _forbidden(request)
-    session_form = AcademicSessionForm(prefix='session')
-    semester_form = SemesterForm(prefix='semester')
-    if request.method == 'POST':
-        if 'create_session' in request.POST:
-            session_form = AcademicSessionForm(request.POST, prefix='session')
-            if session_form.is_valid():
-                session = session_form.save()
-                log_audit(request.user, f'Created academic year {session.name}')
-                messages.success(request, 'Academic year saved.')
-                return redirect('academic_calendar')
-        elif 'create_semester' in request.POST:
-            semester_form = SemesterForm(request.POST, prefix='semester')
-            if semester_form.is_valid():
-                semester = semester_form.save()
-                log_audit(request.user, f'Created semester {semester.name}')
-                messages.success(request, 'Semester saved.')
-                return redirect('academic_calendar')
-    return render(request, 'core/academic_calendar.html', {
-        'session_form': session_form,
-        'semester_form': semester_form,
-        'sessions': AcademicSession.objects.prefetch_related('semesters').order_by('-name'),
-        'semesters': Semester.objects.select_related('academic_session').order_by(
-            '-academic_session__name', 'name'
-        ),
-    })
-
-
-@login_required
-def academic_session_edit(request, pk):
-    if not request.user.is_admin_role():
-        return _forbidden(request)
-    session = get_object_or_404(AcademicSession, pk=pk)
-    form = AcademicSessionForm(request.POST or None, instance=session)
-    if request.method == 'POST' and form.is_valid():
-        session = form.save()
-        Course.objects.filter(
-            semester_record__academic_session=session
-        ).update(academic_year=session.name)
-        log_audit(request.user, f'Updated academic year {session.name}')
-        messages.success(request, 'Academic year updated.')
-        return redirect('academic_calendar')
-    return render(request, 'core/form.html', {
-        'title': 'Edit academic year',
-        'form': form,
-    })
-
-
-@login_required
-def semester_edit(request, pk):
-    if not request.user.is_admin_role():
-        return _forbidden(request)
-    semester = get_object_or_404(Semester, pk=pk)
-    form = SemesterForm(request.POST or None, instance=semester)
-    if request.method == 'POST' and form.is_valid():
-        semester = form.save()
-        Course.objects.filter(semester_record=semester).update(semester=semester.name)
-        log_audit(request.user, f'Updated semester {semester.name}')
-        messages.success(request, 'Semester updated.')
-        return redirect('academic_calendar')
-    return render(request, 'core/form.html', {
-        'title': 'Edit semester',
-        'form': form,
-    })
-
-
-@login_required
 def course_list(request):
     user = request.user
-    courses = Course.objects.select_related(
-        'semester_record__academic_session',
-        'lecturer',
-    ).prefetch_related('enrolments')
+    courses = Course.objects.select_related('lecturer').prefetch_related('enrolments')
     if user.is_admin_role():
         pass
     elif user.is_lecturer():
@@ -1174,16 +1102,34 @@ def course_list(request):
             | Q(assignments__groups__memberships__student=user,
                 assignments__groups__memberships__status=GroupMembership.STATUS_APPROVED)
         ).distinct()
+    year_of_study = request.GET.get('year_of_study', '')
+    semester = request.GET.get('semester', '')
+    course_name = request.GET.get('name', '').strip()
+    course_code = request.GET.get('code', '').strip()
+    if year_of_study.isdecimal() and int(year_of_study) in dict(Course.YEAR_OF_STUDY_CHOICES):
+        courses = courses.filter(year_of_study=int(year_of_study))
+    if semester.isdecimal() and int(semester) in dict(Course.SEMESTER_CHOICES):
+        courses = courses.filter(semester=int(semester))
+    if course_name:
+        courses = courses.filter(name__icontains=course_name)
+    if course_code:
+        courses = courses.filter(code__icontains=course_code)
     return render(request, 'core/course_list.html', {
         'courses': courses.order_by('code', 'name'),
         'can_manage': user.is_admin_role(),
+        'years_of_study': Course.YEAR_OF_STUDY_CHOICES,
+        'semesters': Course.SEMESTER_CHOICES,
+        'selected_year_of_study': year_of_study,
+        'selected_semester': semester,
+        'selected_name': course_name,
+        'selected_code': course_code,
     })
 
 
 @login_required
 def course_detail(request, pk):
     course = get_object_or_404(
-        Course.objects.select_related('lecturer', 'semester_record__academic_session'),
+        Course.objects.select_related('lecturer'),
         pk=pk,
     )
     user = request.user
@@ -1229,7 +1175,7 @@ def course_edit(request, pk):
         record_activity(request.user, 'course_updated', f'Updated course {course.name}')
         messages.success(request, 'Course updated.')
         return redirect('course_detail', course.pk)
-    return render(request, 'core/form.html', {
+    return render(request, 'core/course_form.html', {
         'title': f'Edit course: {course.name}',
         'form': form,
     })
@@ -1239,7 +1185,7 @@ def course_edit(request, pk):
 def assignment_list(request):
     user = request.user
     assignments = Assignment.objects.select_related(
-        'course__semester_record__academic_session',
+        'course',
     ).prefetch_related('groups')
     if user.is_admin_role():
         pass
@@ -2687,15 +2633,42 @@ class CourseViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.is_admin_role():
-            return Course.objects.all()
-        if user.is_lecturer():
-            return Course.objects.filter(
+            courses = Course.objects.all()
+        elif user.is_lecturer():
+            courses = Course.objects.filter(
                 Q(lecturer=user) | Q(lecturer_links__lecturer=user)
             ).distinct()
-        return Course.objects.filter(
-            is_active=True,
-            enrolments__student=user,
-        ).distinct()
+        else:
+            courses = Course.objects.filter(
+                is_active=True,
+                enrolments__student=user,
+            ).distinct()
+
+        year_of_study = self.request.query_params.get('year_of_study')
+        semester_id = self.request.query_params.get('semester')
+        course_name = self.request.query_params.get('name')
+        course_code = self.request.query_params.get('code')
+        if year_of_study and (
+            not year_of_study.isdecimal()
+            or int(year_of_study) not in dict(Course.YEAR_OF_STUDY_CHOICES)
+        ):
+            raise APIValidationError({
+                'year_of_study': 'Use a year of study between 1 and 4.',
+            })
+        if semester_id and (
+            not semester_id.isdecimal()
+            or int(semester_id) not in dict(Course.SEMESTER_CHOICES)
+        ):
+            raise APIValidationError({'semester': 'Use a semester of 1 or 2.'})
+        if year_of_study:
+            courses = courses.filter(year_of_study=int(year_of_study))
+        if semester_id:
+            courses = courses.filter(semester=int(semester_id))
+        if course_name:
+            courses = courses.filter(name__icontains=course_name)
+        if course_code:
+            courses = courses.filter(code__icontains=course_code)
+        return courses
 
 
 class AssignmentViewSet(viewsets.ModelViewSet):

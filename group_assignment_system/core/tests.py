@@ -90,14 +90,25 @@ class GroupAssignmentWorkflowTests(TestCase):
             password='test-password',
             role=User.ROLE_STUDENT,
         )
+        cls.academic_session = AcademicSession.objects.create(
+            name='2026',
+            start_date='2026-01-01',
+            end_date='2026-12-31',
+        )
+        cls.semester = Semester.objects.create(
+            name='Fall',
+            academic_session=cls.academic_session,
+        )
         cls.course = Course.objects.create(
             lecturer=cls.lecturer,
             name='BIT326',
             code='BIT326',
-            semester='Fall',
-            academic_year='2026',
+            year_of_study=3,
+            semester=2,
+            legacy_semester='Fall',
+            legacy_academic_year='2026',
+            legacy_semester_record=cls.semester,
         )
-        cls.semester = cls.course.semester_record
         cls.assignment = Assignment.objects.create(
             course=cls.course,
             title='Group Project',
@@ -125,8 +136,11 @@ class GroupAssignmentWorkflowTests(TestCase):
             lecturer=cls.other_lecturer,
             name='BIT999',
             code='BIT999',
-            semester='Fall',
-            academic_year='2026',
+            year_of_study=2,
+            semester=1,
+            legacy_semester='Fall',
+            legacy_academic_year='2026',
+            legacy_semester_record=cls.semester,
         )
 
     def login(self, user):
@@ -363,8 +377,8 @@ class GroupAssignmentWorkflowTests(TestCase):
             'name': 'Forbidden course',
             'code': 'BAD100',
             'programme': 'BIT',
-            'semester': 'Fall',
-            'academic_year': '2026',
+            'year_of_study': 1,
+            'semester': 1,
         })
         self.assertEqual(response.status_code, 403)
         self.assertNotEqual(self.client.get(reverse('admin:index')).status_code, 200)
@@ -571,8 +585,8 @@ class GroupAssignmentWorkflowTests(TestCase):
                 'code': 'ADM501',
                 'name': 'Administration API Course',
                 'programme': 'BIT',
-                'semester': 'Fall',
-                'academic_year': '2026',
+                'year_of_study': 4,
+                'semester': 1,
                 'lecturer': self.lecturer.pk,
                 'is_active': True,
             },
@@ -633,8 +647,8 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(self.client.get(reverse('api-admin-activity')).status_code, 403)
         self.assertEqual(self.client.post(reverse('api-courses-list'), {
             'name': 'Student-created course',
-            'semester': 'Fall',
-            'academic_year': '2026',
+            'year_of_study': 1,
+            'semester': 1,
         }).status_code, 403)
 
         self.login(self.administrator)
@@ -1041,11 +1055,22 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertFalse(response.wsgi_request.user.is_authenticated)
     def test_administrator_can_create_course_and_assign_a_lecturer(self):
         self.login(self.administrator)
+        course_form = self.client.get(reverse('course_create'))
+        self.assertEqual(course_form.status_code, 200)
+        self.assertContains(course_form, 'Year of study')
+        self.assertContains(course_form, 'Year 1')
+        self.assertContains(course_form, 'Year 4')
+        self.assertContains(course_form, 'Semester 1')
+        self.assertContains(course_form, 'Semester 2')
+        self.assertNotContains(course_form, 'Academic Calendar')
+        self.assertNotContains(course_form, 'Course start date')
+        self.assertNotContains(course_form, 'Course end date')
         response = self.client.post(reverse('course_create'), {
             'name': 'BIT327',
             'code': 'BIT327',
             'programme': 'BIT',
-            'semester_record': self.semester.pk,
+            'year_of_study': 3,
+            'semester': 2,
             'lecturer': self.lecturer.pk,
             'is_active': 'on',
         })
@@ -1058,67 +1083,122 @@ class GroupAssignmentWorkflowTests(TestCase):
             200,
         )
 
-    def test_administrator_manages_academic_years_semesters_courses_and_roster(self):
+    def test_courses_can_be_created_with_each_valid_classification(self):
         self.login(self.administrator)
-        response = self.client.post(reverse('academic_calendar'), {
-            'session-name': '2027',
-            'session-start_date': '2027-01-01',
-            'session-end_date': '2027-12-31',
-            'session-is_active': 'on',
-            'create_session': '1',
-        })
-        self.assertRedirects(response, reverse('academic_calendar'))
-        session = AcademicSession.objects.get(name='2027')
+        endpoint = reverse('api-courses-list')
+        for code, year, semester in (
+            ('TEST101', 1, 1),
+            ('TEST202', 2, 2),
+            ('BIT326A', 3, 2),
+            ('TEST401', 4, 1),
+        ):
+            with self.subTest(code=code):
+                response = self.client.post(
+                    endpoint,
+                    {
+                        'code': code,
+                        'name': f'Course {code}',
+                        'programme': 'BIT',
+                        'year_of_study': year,
+                        'semester': semester,
+                    },
+                    content_type='application/json',
+                )
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(response.data['year_of_study'], year)
+                self.assertEqual(response.data['semester'], semester)
 
-        response = self.client.post(reverse('academic_calendar'), {
-            'semester-name': 'Spring',
-            'semester-academic_session': session.pk,
-            'semester-is_active': 'on',
-            'create_semester': '1',
-        })
-        self.assertRedirects(response, reverse('academic_calendar'))
-        semester = Semester.objects.get(name='Spring', academic_session=session)
+    def test_course_classification_is_required_and_choice_limited_in_api(self):
+        self.login(self.administrator)
+        endpoint = reverse('api-courses-list')
+        base_payload = {'code': 'VALIDATION101', 'name': 'Validation course'}
+        for payload, field in (
+            ({}, 'year_of_study'),
+            ({'year_of_study': 1}, 'semester'),
+            ({'year_of_study': 5, 'semester': 1}, 'year_of_study'),
+            ({'year_of_study': 1, 'semester': 3}, 'semester'),
+        ):
+            response = self.client.post(
+                endpoint,
+                {**base_payload, **payload},
+                content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(field, response.data)
+        self.assertFalse(Course.objects.filter(code='VALIDATION101').exists())
 
-        response = self.client.post(reverse('course_create'), {
-            'code': 'BIT327',
-            'name': 'Software Engineering',
-            'programme': 'BIT',
-            'semester_record': semester.pk,
-            'lecturer': self.lecturer.pk,
-            'is_active': 'on',
-        })
-        course = Course.objects.get(code='BIT327')
-        self.assertRedirects(response, reverse('course_detail', args=[course.pk]))
-        self.assertEqual(course.academic_year, '2027')
-        self.assertEqual(course.semester, 'Spring')
+    def test_courses_can_be_filtered_by_year_semester_name_and_code(self):
+        self.login(self.administrator)
+        endpoint = reverse('api-courses-list')
+        expected = {
+            'year_of_study': {self.course.pk},
+            'semester': {self.course.pk},
+            'name': {self.course.pk},
+            'code': {self.other_course.pk},
+        }
+        params = {
+            'year_of_study': {'year_of_study': 3},
+            'semester': {'semester': 2},
+            'name': {'name': 'BIT326'},
+            'code': {'code': 'BIT999'},
+        }
+        for filter_name, query in params.items():
+            with self.subTest(filter=filter_name):
+                response = self.client.get(endpoint, query)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    {item['id'] for item in response.data},
+                    expected[filter_name],
+                )
 
-        CourseEnrolment.objects.create(course=course, student=self.student)
-        response = self.client.get(reverse('course_detail', args=[course.pk]))
+    def test_administrator_can_update_classification_and_legacy_data_is_preserved(self):
+        self.login(self.administrator)
+        response = self.client.patch(
+            reverse('api-courses-detail', args=[self.course.pk]),
+            {'year_of_study': 4, 'semester': 1},
+            content_type='application/json',
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, self.student.username)
+        self.course.refresh_from_db()
+        self.assertEqual((self.course.year_of_study, self.course.semester), (4, 1))
+        self.assertEqual(self.course.legacy_academic_year, '2026')
+        self.assertEqual(self.course.legacy_semester, 'Fall')
+        self.assertEqual(self.course.legacy_semester_record, self.semester)
+        self.assertTrue(Assignment.objects.filter(course=self.course).exists())
+        self.assertTrue(CourseEnrolment.objects.filter(course=self.course).exists())
 
-        response = self.client.post(reverse('academic_session_edit', args=[session.pk]), {
-            'name': '2027/28',
-            'start_date': '2027-01-01',
-            'end_date': '2027-12-31',
-            'is_active': 'on',
-        })
-        self.assertRedirects(response, reverse('academic_calendar'))
-        course.refresh_from_db()
-        self.assertEqual(course.academic_year, '2027/28')
-
-        response = self.client.post(reverse('course_edit', args=[course.pk]), {
-            'code': 'BIT328',
-            'name': 'Advanced Software Engineering',
+    def test_classification_form_rejects_missing_values_and_calendar_module_is_removed(self):
+        self.login(self.administrator)
+        response = self.client.post(reverse('course_create'), {
+            'name': 'Missing classification',
+            'code': 'NOCLASS',
             'programme': 'BIT',
-            'semester_record': self.semester.pk,
-            'lecturer': self.other_lecturer.pk,
         })
-        self.assertRedirects(response, reverse('course_detail', args=[course.pk]))
-        course.refresh_from_db()
-        self.assertEqual(course.code, 'BIT328')
-        self.assertEqual(course.lecturer, self.other_lecturer)
-        self.assertFalse(course.is_active)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Course.objects.filter(code='NOCLASS').exists())
+        self.assertEqual(self.client.get('/academic-calendar/').status_code, 404)
+
+    def test_existing_unclassified_course_can_be_safely_assigned(self):
+        Course.objects.bulk_create([Course(
+            code='OLD100',
+            name='Legacy unclassified course',
+            legacy_academic_year='2026',
+            legacy_semester='Semester 1',
+        )])
+        legacy = Course.objects.get(code='OLD100')
+        self.assertEqual(legacy.legacy_academic_year, '2026')
+        self.assertEqual(legacy.legacy_semester, 'Semester 1')
+        self.assertIsNone(legacy.year_of_study)
+        self.assertIsNone(legacy.semester)
+        self.login(self.administrator)
+        response = self.client.patch(
+            reverse('api-courses-detail', args=[legacy.pk]),
+            {'year_of_study': 1, 'semester': 1},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        legacy.refresh_from_db()
+        self.assertEqual(legacy.get_year_of_study_display(), 'Year 1')
 
     def test_lecturer_creates_publishes_edits_and_closes_assignment(self):
         self.login(self.lecturer)
@@ -2255,10 +2335,10 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertIsNone(profile.student_number)
         self.assertEqual(self.student.student_number, '')
         self.assertTrue(LecturerProfile.objects.filter(user=self.lecturer).exists())
-        self.assertEqual(self.course.semester_record.name, self.course.semester)
+        self.assertEqual(self.course.legacy_semester_record.name, self.course.legacy_semester)
         self.assertEqual(
-            self.course.semester_record.academic_session.name,
-            self.course.academic_year,
+            self.course.legacy_semester_record.academic_session.name,
+            self.course.legacy_academic_year,
         )
 
     def test_duplicate_group_memberships_are_rejected(self):
@@ -2770,8 +2850,8 @@ class GroupAssignmentWorkflowTests(TestCase):
                         'course': self.course.pk,
                         'assignment': self.assignment.pk,
                         'group': self.group.pk,
-                        'semester': self.semester.name,
-                        'academic_year': self.course.academic_year,
+                        'semester': self.course.semester,
+                        'year_of_study': self.course.year_of_study,
                     },
                 )
                 self.assertEqual(response.status_code, 200)

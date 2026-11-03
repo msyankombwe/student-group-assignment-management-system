@@ -104,22 +104,22 @@ class Command(BaseCommand):
 
         course1, _ = Course.objects.update_or_create(
             code='BIT326',
-            academic_year='2026',
+            year_of_study=3,
+            semester=2,
             defaults={
                 'name': 'Software Engineering',
                 'programme': 'BIT',
-                'semester': 'Semester 1',
                 'lecturer': lecturers[0],
                 'is_active': True,
             },
         )
         course2, _ = Course.objects.update_or_create(
             code='BIT340',
-            academic_year='2026',
+            year_of_study=3,
+            semester=2,
             defaults={
                 'name': 'Database Systems',
                 'programme': 'BIT',
-                'semester': 'Semester 1',
                 'lecturer': lecturers[1],
                 'is_active': True,
             },

@@ -7,6 +7,8 @@ import './App.css'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 const DJANGO_BASE = (import.meta.env.VITE_DJANGO_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')
 const EMPTY_API_LIST = []
+const YEAR_OF_STUDY_OPTIONS = [1, 2, 3, 4]
+const SEMESTER_OPTIONS = [1, 2]
 const apiClient = axios.create({
   baseURL: `${API_BASE}/`,
   withCredentials: true,
@@ -261,7 +263,10 @@ function StatusBadge({ active }) {
 
 function CourseCard({ course }) {
   const courseCode = course.code || 'Course'
-  const semester = [course.semester, course.academic_year].filter(Boolean).join(' · ')
+  const classification = [
+    course.year_of_study_label || (course.year_of_study ? `Year ${course.year_of_study}` : ''),
+    course.semester_label || (course.semester ? `Semester ${course.semester}` : ''),
+  ].filter(Boolean).join(' · ')
 
   return (
     <article className="portal-card course-card">
@@ -271,7 +276,7 @@ function CourseCard({ course }) {
       </div>
       <h3>{course.name}</h3>
       {course.programme && <p className="card-detail">{course.programme}</p>}
-      {semester && <p className="card-detail">{semester}</p>}
+      {classification && <p className="card-detail">{classification}</p>}
       <Link className="text-action" to={`/courses/${course.id}`}>
         Open course <span aria-hidden="true">→</span>
       </Link>
@@ -665,17 +670,27 @@ function DashboardPage({ user }) {
 
 function CoursePage() {
   const [query, setQuery] = useState('')
+  const [yearOfStudy, setYearOfStudy] = useState('')
+  const [semester, setSemester] = useState('')
   const courses = useApiList('courses')
   const filteredCourses = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return courses.data.filter((course) => {
-      const searchableText = [course.code, course.name, course.programme, course.semester, course.academic_year]
+      const searchableText = [
+        course.code,
+        course.name,
+        course.programme,
+        course.year_of_study_label,
+        course.semester_label,
+      ]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
       return searchableText.includes(normalizedQuery)
+        && (!yearOfStudy || String(course.year_of_study || '') === yearOfStudy)
+        && (!semester || String(course.semester || '') === semester)
     })
-  }, [courses.data, query])
+  }, [courses.data, query, semester, yearOfStudy])
 
   return (
     <div className="page-content">
@@ -698,6 +713,20 @@ function CoursePage() {
               : `${filteredCourses.length} ${filteredCourses.length === 1 ? 'course' : 'courses'}`}
         </span>
       </div>
+      <div className="course-management-filters">
+        <label>Year of study
+          <select className="admin-control" onChange={(event) => setYearOfStudy(event.target.value)} value={yearOfStudy}>
+            <option value="">All years of study</option>
+            {YEAR_OF_STUDY_OPTIONS.map((year) => <option key={year} value={year}>Year {year}</option>)}
+          </select>
+        </label>
+        <label>Semester
+          <select className="admin-control" onChange={(event) => setSemester(event.target.value)} value={semester}>
+            <option value="">All semesters</option>
+            {SEMESTER_OPTIONS.map((item) => <option key={item} value={item}>Semester {item}</option>)}
+          </select>
+        </label>
+      </div>
       {courses.error || courses.loading
         ? <ApiState
             authRequired={courses.authRequired}
@@ -707,8 +736,8 @@ function CoursePage() {
           />
         : <CourseGrid
             courses={filteredCourses}
-            emptyDescription={query ? 'Try another search term or clear your search.' : undefined}
-            emptyTitle={query ? 'No matching courses' : undefined}
+            emptyDescription={query || yearOfStudy || semester ? 'Try changing or clearing the search and filters.' : undefined}
+            emptyTitle={query || yearOfStudy || semester ? 'No matching courses' : undefined}
           />}
     </div>
   )
@@ -741,7 +770,11 @@ function CourseDetailPage() {
     <div className="page-content">
       <Link className="back-link" to="/courses">← Back to My Courses</Link>
       <PageHeading
-        description={[course.data.programme, course.data.semester, course.data.academic_year].filter(Boolean).join(' · ')}
+        description={[
+          course.data.programme,
+          course.data.year_of_study_label,
+          course.data.semester_label,
+        ].filter(Boolean).join(' · ')}
         eyebrow={course.data.code || 'Course'}
         title={course.data.name}
       />
@@ -1412,13 +1445,18 @@ function UserPage({ user: currentUser }) {
   )
 }
 
-function AdminCourseForm({ course, lecturers, onCancel, onSaved }) {
+function AdminCourseForm({
+  course,
+  lecturers,
+  onCancel,
+  onSaved,
+}) {
   const [draft, setDraft] = useState(() => ({
     code: course?.code || '',
     name: course?.name || '',
     programme: course?.programme || '',
-    semester: course?.semester || '',
-    academic_year: course?.academic_year || '',
+    year_of_study: course?.year_of_study ? String(course.year_of_study) : '',
+    semester: course?.semester ? String(course.semester) : '',
     lecturer: course?.lecturer ? String(course.lecturer) : '',
     is_active: course?.is_active ?? true,
   }))
@@ -1434,8 +1472,13 @@ function AdminCourseForm({ course, lecturers, onCancel, onSaved }) {
     setSaving(true)
     setError('')
     const payload = {
-      ...draft,
+      code: draft.code,
+      name: draft.name,
+      programme: draft.programme,
+      year_of_study: Number(draft.year_of_study),
+      semester: Number(draft.semester),
       lecturer: draft.lecturer ? Number(draft.lecturer) : null,
+      is_active: draft.is_active,
     }
     try {
       if (course) await apiClient.patch(`courses/${course.id}/`, payload)
@@ -1457,9 +1500,19 @@ function AdminCourseForm({ course, lecturers, onCancel, onSaved }) {
       <form className="admin-form-grid" onSubmit={saveCourse}>
         <label>Course code<input className="admin-control" onChange={(event) => setField('code', event.target.value)} value={draft.code} /></label>
         <label>Course name<input className="admin-control" onChange={(event) => setField('name', event.target.value)} required value={draft.name} /></label>
-        <label>Programme<input className="admin-control" onChange={(event) => setField('programme', event.target.value)} value={draft.programme} /></label>
-        <label>Semester<input className="admin-control" onChange={(event) => setField('semester', event.target.value)} required value={draft.semester} /></label>
-        <label>Academic year<input className="admin-control" onChange={(event) => setField('academic_year', event.target.value)} required value={draft.academic_year} /></label>
+        <label>School / Department<input className="admin-control" onChange={(event) => setField('programme', event.target.value)} value={draft.programme} /></label>
+        <label>Year of study
+          <select className="admin-control" onChange={(event) => setField('year_of_study', event.target.value)} required value={draft.year_of_study}>
+            <option value="">Select year of study</option>
+            {YEAR_OF_STUDY_OPTIONS.map((year) => <option key={year} value={year}>Year {year}</option>)}
+          </select>
+        </label>
+        <label>Semester
+          <select className="admin-control" onChange={(event) => setField('semester', event.target.value)} required value={draft.semester}>
+            <option value="">Select semester</option>
+            {SEMESTER_OPTIONS.map((semester) => <option key={semester} value={semester}>Semester {semester}</option>)}
+          </select>
+        </label>
         <label>Lead lecturer<select className="admin-control" onChange={(event) => setField('lecturer', event.target.value)} value={draft.lecturer}><option value="">Unassigned</option>{lecturers.map((lecturer) => <option key={lecturer.id} value={lecturer.id}>{[lecturer.first_name, lecturer.last_name].filter(Boolean).join(' ') || lecturer.username}</option>)}</select></label>
         <label className="admin-checkbox"><input checked={draft.is_active} onChange={(event) => setField('is_active', event.target.checked)} type="checkbox" />Course is active</label>
         <div className="admin-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Saving…' : course ? 'Save course' : 'Create course'}</button></div>
@@ -1473,17 +1526,21 @@ function CourseManagementPage() {
   const courses = useApiList('courses')
   const users = useApiList('users')
   const [editing, setEditing] = useState(null)
-  const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState({
+    yearOfStudy: '',
+    semester: '',
+    name: '',
+    code: '',
+  })
   const resources = [courses, users]
   const failed = resources.find((resource) => resource.error)
   const loading = resources.some((resource) => resource.loading)
   const lecturers = users.data.filter((user) => user.role === 'lecturer' && user.is_active)
   const filteredCourses = courses.data.filter((course) => (
-    [course.code, course.name, course.programme, course.semester, course.academic_year]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-      .includes(search.trim().toLowerCase())
+    (!filters.yearOfStudy || String(course.year_of_study || '') === filters.yearOfStudy)
+    && (!filters.semester || String(course.semester || '') === filters.semester)
+    && (!filters.name || course.name.toLowerCase().includes(filters.name.trim().toLowerCase()))
+    && (!filters.code || course.code.toLowerCase().includes(filters.code.trim().toLowerCase()))
   ))
 
   function refresh() {
@@ -1498,8 +1555,30 @@ function CourseManagementPage() {
         eyebrow="Administration"
         title="Course management"
       />
-      <AdminCourseForm course={editing} key={editing?.id || 'new-course'} lecturers={lecturers} onCancel={() => setEditing(null)} onSaved={refresh} />
-      <SearchToolbar count={loading || failed ? null : filteredCourses.length} onChange={setSearch} placeholder="Search courses" value={search} />
+      <AdminCourseForm
+        course={editing}
+        key={editing?.id || 'new-course'}
+        lecturers={lecturers}
+        onCancel={() => setEditing(null)}
+        onSaved={refresh}
+      />
+      <div className="course-management-filters">
+        <label>Course name<input className="admin-control" onChange={(event) => setFilters({ ...filters, name: event.target.value })} value={filters.name} /></label>
+        <label>Course code<input className="admin-control" onChange={(event) => setFilters({ ...filters, code: event.target.value })} value={filters.code} /></label>
+        <label>Year of study
+          <select className="admin-control" onChange={(event) => setFilters({ ...filters, yearOfStudy: event.target.value })} value={filters.yearOfStudy}>
+            <option value="">All years of study</option>
+            {YEAR_OF_STUDY_OPTIONS.map((year) => <option key={year} value={year}>Year {year}</option>)}
+          </select>
+        </label>
+        <label>Semester
+          <select className="admin-control" onChange={(event) => setFilters({ ...filters, semester: event.target.value })} value={filters.semester}>
+            <option value="">All semesters</option>
+            {SEMESTER_OPTIONS.map((semester) => <option key={semester} value={semester}>Semester {semester}</option>)}
+          </select>
+        </label>
+      </div>
+      <p aria-live="polite" className="result-count">{loading || failed ? 'Loading courses' : `${filteredCourses.length} ${filteredCourses.length === 1 ? 'course' : 'courses'}`}</p>
       {loading || failed
         ? <ApiState
             authRequired={failed?.authRequired}
@@ -1508,20 +1587,22 @@ function CourseManagementPage() {
             retry={() => resources.forEach((resource) => resource.error && resource.retry())}
           />
         : <div className="admin-table-wrap"><table className="admin-table">
-            <thead><tr><th scope="col">Course</th><th scope="col">Programme</th><th scope="col">Semester / year</th><th scope="col">Lead lecturer</th><th scope="col">Status</th><th scope="col">Manage</th></tr></thead>
+            <thead><tr><th scope="col">Course code</th><th scope="col">Course name</th><th scope="col">Year of study</th><th scope="col">Semester</th><th scope="col">Department</th><th scope="col">Lead lecturer</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
             <tbody>
               {filteredCourses.map((course) => {
                 const lecturer = lookup(users.data, course.lecturer)
                 return <tr key={course.id}>
-                  <th scope="row">{course.code || course.name}<div className="admin-user-subtitle">{course.name}</div></th>
+                  <th scope="row"><a href={`${DJANGO_BASE}/courses/${course.id}/`}>{course.code || '—'}</a></th>
+                  <td>{course.name}</td>
+                  <td>{course.year_of_study_label || 'Not classified'}</td>
+                  <td>{course.semester_label || 'Not classified'}</td>
                   <td>{course.programme || '—'}</td>
-                  <td>{[course.semester, course.academic_year].filter(Boolean).join(' · ') || '—'}</td>
                   <td>{lecturer ? [lecturer.first_name, lecturer.last_name].filter(Boolean).join(' ') || lecturer.username : 'Unassigned'}</td>
                   <td><StatusBadge active={course.is_active} /></td>
                   <td><button className="button button-secondary button-small" onClick={() => setEditing(course)} type="button">Edit</button></td>
                 </tr>
               })}
-              {!filteredCourses.length && <tr><td colSpan="6"><EmptyPanel title={search ? 'No matching courses' : 'No courses yet'} description="Create a course above to populate the catalogue." /></td></tr>}
+              {!filteredCourses.length && <tr><td colSpan="8"><EmptyPanel title={Object.values(filters).some(Boolean) ? 'No matching courses' : 'No courses yet'} description="Create a course above to populate the catalogue." /></td></tr>}
             </tbody>
           </table></div>}
     </div>

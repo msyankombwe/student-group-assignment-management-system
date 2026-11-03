@@ -1,0 +1,29 @@
+{% extends "core/base.html" %}
+{% block title %}{{ title }} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <p class="text-uppercase small fw-semibold text-secondary mb-1">Course management</p>
+    <h1 class="h3 mb-1">{{ title }}</h1>
+    <p class="text-secondary mb-0">Classify the course by its year of study and semester.</p>
+</div>
+<section class="card shadow-sm">
+    <div class="card-body">
+        <form method="post" novalidate>
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            {% for field in form %}
+                <div class="mb-3">
+                    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                    {% for error in field.errors %}<div class="text-danger small" role="alert">{{ error }}</div>{% endfor %}
+                </div>
+            {% endfor %}
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-primary" type="submit">{% if form.instance.pk %}Save Course{% else %}Create Course{% endif %}</button>
+                <a class="btn btn-outline-secondary" href="{% url 'course_list' %}">Cancel</a>
+            </div>
+        </form>
+    </div>
+</section>
+{% endblock %}

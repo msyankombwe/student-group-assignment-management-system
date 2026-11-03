@@ -5,7 +5,15 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .models import ContributionActivity, FileDocument, Group, GroupMembership, Notification, Task, User
+from .models import (
+    ContributionActivity,
+    FileDocument,
+    Group,
+    GroupMembership,
+    Notification,
+    Task,
+    User,
+)
 
 
 class DemoDataCommandTests(TestCase):
@@ -39,7 +47,7 @@ class DemoDataCommandTests(TestCase):
                 self.assertGreater(first_counts['notifications'], 0)
 
                 role_accounts = (
-                    ('admin.demo', 'DemoAdmin123!', 'admin', ('dashboard', 'reports', 'academic_calendar')),
+                    ('admin.demo', 'DemoAdmin123!', 'admin', ('dashboard', 'reports', 'course_list')),
                     ('lecturer.banda', 'DemoLecturer123!', 'lecturer', ('dashboard', 'course_list', 'assignment_list', 'group_list', 'task_list', 'submission_list', 'reports')),
                     ('student01', 'DemoStudent123!', 'student', ('dashboard', 'course_list', 'assignment_list', 'group_list', 'task_list', 'notifications')),
                 )
@@ -55,3 +63,4 @@ class DemoDataCommandTests(TestCase):
                                     self.client.get(reverse(page)).status_code,
                                     200,
                                 )
+                self.assertEqual(self.client.get('/academic-calendar/').status_code, 404)

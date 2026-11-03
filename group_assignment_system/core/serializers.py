@@ -141,6 +141,23 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
 
 class CourseSerializer(serializers.ModelSerializer):
+    year_of_study = serializers.ChoiceField(
+        choices=Course.YEAR_OF_STUDY_CHOICES,
+        required=True,
+    )
+    year_of_study_label = serializers.CharField(
+        source='get_year_of_study_display',
+        read_only=True,
+    )
+    semester = serializers.ChoiceField(
+        choices=Course.SEMESTER_CHOICES,
+        required=True,
+    )
+    semester_label = serializers.CharField(
+        source='get_semester_display',
+        read_only=True,
+    )
+
     class Meta:
         model = Course
         fields = (
@@ -148,11 +165,38 @@ class CourseSerializer(serializers.ModelSerializer):
             'code',
             'name',
             'programme',
+            'year_of_study',
+            'year_of_study_label',
             'semester',
-            'academic_year',
+            'semester_label',
             'lecturer',
             'is_active',
         )
+        read_only_fields = ('year_of_study_label', 'semester_label')
+
+    def validate(self, attrs):
+        if self.instance and not {
+            'year_of_study',
+            'semester',
+        }.intersection(attrs):
+            return attrs
+        year_of_study = attrs.get(
+            'year_of_study',
+            self.instance.year_of_study if self.instance else None,
+        )
+        semester = attrs.get(
+            'semester',
+            self.instance.semester if self.instance else None,
+        )
+        if year_of_study is None:
+            raise serializers.ValidationError({
+                'year_of_study': 'Select a year of study.',
+            })
+        if semester is None:
+            raise serializers.ValidationError({
+                'semester': 'Select a semester.',
+            })
+        return attrs
 
     def validate_lecturer(self, lecturer):
         if lecturer and lecturer.role != User.ROLE_LECTURER:

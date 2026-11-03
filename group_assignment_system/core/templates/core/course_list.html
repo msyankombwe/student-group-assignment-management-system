@@ -20,6 +20,41 @@
     {% endif %}
 </header>
 
+<form class="card card-body mb-4" method="get">
+        <div class="row g-3 align-items-end">
+            <div class="col-sm-6 col-lg-3">
+                <label class="form-label" for="course-name-filter">Course name</label>
+                <input class="form-control" id="course-name-filter" name="name" type="search" value="{{ selected_name }}">
+            </div>
+            <div class="col-sm-6 col-lg-3">
+                <label class="form-label" for="course-code-filter">Course code</label>
+                <input class="form-control" id="course-code-filter" name="code" type="search" value="{{ selected_code }}">
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label class="form-label" for="year-of-study-filter">Year of study</label>
+                <select class="form-select" id="year-of-study-filter" name="year_of_study">
+                    <option value="">All years</option>
+                    {% for value, label in years_of_study %}
+                        <option value="{{ value }}" {% if selected_year_of_study == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label class="form-label" for="semester-filter">Semester</label>
+                <select class="form-select" id="semester-filter" name="semester">
+                    <option value="">All semesters</option>
+                    {% for value, label in semesters %}
+                        <option value="{{ value }}" {% if selected_semester == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-sm-6 col-lg-2 d-flex gap-2">
+                <button class="btn btn-primary" type="submit">Filter</button>
+                <a class="btn btn-outline-secondary" href="{% url 'course_list' %}">Clear</a>
+            </div>
+        </div>
+</form>
+
 <section aria-label="Available courses">
     {% if courses %}
         <div class="row g-4">
@@ -28,7 +63,7 @@
                     <article class="card course-card h-100">
                         <div class="course-card__visual">
                             <span class="course-card__code">{{ course.code|default:course.name }}</span>
-                            <span class="course-card__term">{{ course.academic_year }}</span>
+                            <span class="course-card__term">{{ course.get_year_of_study_display|default:"Year unassigned" }}</span>
                         </div>
                         <div class="course-card__body">
                             <div class="d-flex align-items-start justify-content-between gap-2">
@@ -38,7 +73,8 @@
                                 </span>
                             </div>
                             <p class="course-card__meta mb-3">
-                                {{ course.semester }} · Academic year {{ course.academic_year }}
+                                {{ course.get_semester_display|default:"Semester unassigned" }}
+                                <br>Department: {{ course.programme|default:"Not specified" }}
                                 {% if course.lecturer %}
                                     <br>Lecturer: {{ course.lecturer.get_full_name|default:course.lecturer.username }}
                                 {% endif %}

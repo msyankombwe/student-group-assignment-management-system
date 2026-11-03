@@ -20,7 +20,7 @@
                 {% for assignment in assignments %}
                     <tr>
                         <th scope="row"><a href="{% url 'assignment_detail' assignment.pk %}">{{ assignment.title }}</a><div class="small text-secondary fw-normal">{{ assignment.description|truncatechars:115 }}</div></th>
-                        <td><a href="{% url 'course_detail' assignment.course_id %}">{{ assignment.course.code|default:assignment.course.name }}</a><div class="small text-secondary">{{ assignment.course.semester }} {{ assignment.course.academic_year }}</div></td>
+                        <td><a href="{% url 'course_detail' assignment.course_id %}">{{ assignment.course.code|default:assignment.course.name }}</a><div class="small text-secondary">{{ assignment.course.get_year_of_study_display|default:"Year unassigned" }} · {{ assignment.course.get_semester_display|default:"Semester unassigned" }}</div></td>
                         <td class="tabular-nums">{{ assignment.groups.count }}</td>
                         <td class="tabular-nums">{% if assignment.published_at %}{{ assignment.published_at|date:"M j, Y" }}{% else %}Not published{% endif %}</td>
                         <td class="tabular-nums">{{ assignment.deadline|date:"M j, Y H:i" }}</td>

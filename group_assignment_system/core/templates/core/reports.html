@@ -51,17 +51,17 @@
                 <label class="form-label" for="report-semester">Semester</label>
                 <select class="form-select" id="report-semester" name="semester">
                     <option value="">All semesters</option>
-                    {% for semester in semesters %}
-                        <option value="{{ semester.name }}" {% if selected_semester == semester.name %}selected{% endif %}>{{ semester.name }}</option>
+                    {% for value, label in semesters %}
+                        <option value="{{ value }}" {% if selected_semester == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="form-label" for="report-year">Academic year</label>
-                <select class="form-select" id="report-year" name="academic_year">
+                <label class="form-label" for="report-year">Year of study</label>
+                <select class="form-select" id="report-year" name="year_of_study">
                     <option value="">All years</option>
-                    {% for year in academic_years %}
-                        {% if year %}<option value="{{ year }}" {% if selected_year == year %}selected{% endif %}>{{ year }}</option>{% endif %}
+                    {% for value, label in years_of_study %}
+                        <option value="{{ value }}" {% if selected_year == value|stringformat:"s" %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -76,7 +76,7 @@
     <div class="card-body">
         <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
             <h2 class="h5 mb-0">{{ title }}</h2>
-            <a class="btn btn-sm btn-outline-primary" href="?type={{ report_type }}&amp;course={{ selected_course }}&amp;assignment={{ selected_assignment }}&amp;group={{ selected_group }}&amp;semester={{ selected_semester|urlencode }}&amp;academic_year={{ selected_year|urlencode }}&amp;format=csv">Download CSV</a>
+            <a class="btn btn-sm btn-outline-primary" href="?type={{ report_type }}&amp;course={{ selected_course }}&amp;assignment={{ selected_assignment }}&amp;group={{ selected_group }}&amp;semester={{ selected_semester|urlencode }}&amp;year_of_study={{ selected_year|urlencode }}&amp;format=csv">Download CSV</a>
         </div>
         {% if report_type == "contribution" %}
             <p class="small text-secondary">Recorded activity is supporting evidence for lecturer assessment, not an automatic measure of effort, quality, or academic performance.</p>

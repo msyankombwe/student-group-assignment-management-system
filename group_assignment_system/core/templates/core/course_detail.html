@@ -6,8 +6,9 @@
         <p class="text-secondary mb-1"><a href="{% url 'course_list' %}">Courses</a></p>
         <h1 class="h3 mb-1">{{ course.code|default:course.name }} · {{ course.name }}</h1>
         <p class="text-secondary mb-0">
-            {{ course.programme|default:"Programme not specified" }} ·
-            {{ course.semester }} {{ course.academic_year }}
+            {{ course.programme|default:"Department not specified" }} ·
+            {{ course.get_year_of_study_display|default:"Year unassigned" }} ·
+            {{ course.get_semester_display|default:"Semester unassigned" }}
         </p>
         {% if course.lecturer %}
             <p class="text-secondary">Lecturer: {{ course.lecturer.get_full_name|default:course.lecturer.username }}</p>
