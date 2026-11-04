@@ -275,6 +275,12 @@ class CourseEnrolment(models.Model):
 
 
 class Assignment(models.Model):
+    TYPE_INDIVIDUAL = 'individual'
+    TYPE_GROUP = 'group'
+    TYPE_CHOICES = [
+        (TYPE_INDIVIDUAL, 'Individual Assignment'),
+        (TYPE_GROUP, 'Group Assignment'),
+    ]
     STATUS_DRAFT = 'draft'
     STATUS_PUBLISHED = 'published'
     STATUS_CLOSED = 'closed'
@@ -284,6 +290,11 @@ class Assignment(models.Model):
         (STATUS_CLOSED, 'Closed'),
     ]
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
+    assignment_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default=TYPE_GROUP,
+    )
     title = models.CharField(max_length=200)
     description = models.TextField()
     objectives = models.TextField(default='')
@@ -325,6 +336,27 @@ class Assignment(models.Model):
     def __str__(self):
         return self.title
 
+    def clean(self):
+        if self.assignment_type not in dict(self.TYPE_CHOICES):
+            raise ValidationError({'assignment_type': 'Select a valid assignment type.'})
+        if self.pk:
+            previous_type = type(self).objects.filter(pk=self.pk).values_list(
+                'assignment_type',
+                flat=True,
+            ).first()
+            if (
+                previous_type
+                and previous_type != self.assignment_type
+                and (
+                    self.groups.exists()
+                    or self.submissions.exists()
+                    or self.representative_appointments.exists()
+                )
+            ):
+                raise ValidationError(
+                    'Assignment type cannot change after groups or submissions exist.'
+                )
+
     def is_published(self):
         return (
             self.status == self.STATUS_PUBLISHED
@@ -335,6 +367,183 @@ class Assignment(models.Model):
     def save(self, *args, **kwargs):
         if self.status == self.STATUS_PUBLISHED and self.published_at is None:
             self.published_at = timezone.now()
+        self.clean()
+        super().save(*args, **kwargs)
+
+
+class AssignmentClassRepresentative(models.Model):
+    STATUS_ACTIVE = 'active'
+    STATUS_REPLACED = 'replaced'
+    STATUS_REMOVED = 'removed'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_REPLACED, 'Replaced'),
+        (STATUS_REMOVED, 'Removed'),
+    ]
+
+    assignment = models.ForeignKey(
+        Assignment,
+        on_delete=models.CASCADE,
+        related_name='representative_appointments',
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assignment_representative_appointments',
+    )
+    student_username_snapshot = models.CharField(max_length=150, blank=True)
+    student_full_name_snapshot = models.CharField(max_length=255, blank=True)
+    student_number_snapshot = models.CharField(max_length=50, blank=True)
+    appointed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='representative_appointments_made',
+    )
+    appointed_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(
+        max_length=12,
+        choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE,
+    )
+    ended_at = models.DateTimeField(null=True, blank=True)
+    ended_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='representative_appointments_ended',
+    )
+    appointed_by_username_snapshot = models.CharField(max_length=150, blank=True)
+    appointed_by_full_name_snapshot = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['-appointed_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['assignment'],
+                condition=models.Q(status='active'),
+                name='one_active_representative_per_assignment',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(status='active')
+                    | models.Q(student__isnull=False)
+                ),
+                name='active_representative_requires_student',
+            ),
+        ]
+
+    def clean(self):
+        if not self.assignment_id:
+            raise ValidationError({'assignment': 'Select an assignment for this appointment.'})
+        assignment = Assignment.objects.filter(pk=self.assignment_id).first()
+        if assignment is None:
+            raise ValidationError({'assignment': 'The selected assignment does not exist.'})
+        if assignment.assignment_type != Assignment.TYPE_GROUP:
+            raise ValidationError({
+                'assignment': 'Representatives can only be appointed to group assignments.'
+            })
+        creating = self._state.adding
+        if self.student_id:
+            student = User.objects.filter(pk=self.student_id).first()
+            if student is None:
+                raise ValidationError({'student': 'The selected student does not exist.'})
+            if (creating or self.status == self.STATUS_ACTIVE) and (
+                student.role != User.ROLE_STUDENT or not student.is_active
+            ):
+                raise ValidationError({
+                    'student': 'The representative must be an active student.'
+                })
+            if (creating or self.status == self.STATUS_ACTIVE) and not CourseEnrolment.objects.filter(
+                course_id=assignment.course_id,
+                student_id=self.student_id,
+            ).exists():
+                raise ValidationError({
+                    'student': 'The representative must be enrolled in the assignment course.'
+                })
+        elif self.status == self.STATUS_ACTIVE:
+            raise ValidationError({'student': 'An active appointment requires a student.'})
+
+        if self.status not in dict(self.STATUS_CHOICES):
+            raise ValidationError({'status': 'Select a valid appointment status.'})
+        if not self.appointed_by_id:
+            if creating:
+                raise ValidationError({
+                    'appointed_by': 'Record the lecturer or administrator making the appointment.'
+                })
+        elif creating:
+            from .services import user_can_appoint_assignment_representative
+
+            appointing_officer = User.objects.filter(pk=self.appointed_by_id).first()
+            if appointing_officer is None or not user_can_appoint_assignment_representative(
+                appointing_officer,
+                assignment,
+            ):
+                raise ValidationError({
+                    'appointed_by': (
+                        'The appointing officer must be an administrator or a lecturer '
+                        'authorized to manage this assignment.'
+                    )
+                })
+
+        if not creating:
+            existing = type(self).objects.filter(pk=self.pk).values(
+                'assignment_id',
+                'student_id',
+                'appointed_by_id',
+                'student_username_snapshot',
+                'student_full_name_snapshot',
+                'student_number_snapshot',
+                'appointed_by_username_snapshot',
+                'appointed_by_full_name_snapshot',
+            ).first()
+            if existing and any(
+                getattr(self, field) != value
+                for field, value in existing.items()
+            ):
+                raise ValidationError(
+                    'Appointment identity and history fields cannot be changed.'
+                )
+
+        if self.status == self.STATUS_ACTIVE and self.ended_at is not None:
+            raise ValidationError({
+                'ended_at': 'An active appointment cannot have an end date.'
+            })
+        if self.status != self.STATUS_ACTIVE and self.ended_at is None:
+            raise ValidationError({
+                'ended_at': 'A closed appointment must have an end date.'
+            })
+        if self.ended_by_id:
+            from .services import user_can_appoint_assignment_representative
+
+            ending_officer = User.objects.filter(pk=self.ended_by_id).first()
+            if ending_officer is None or not user_can_appoint_assignment_representative(
+                ending_officer,
+                assignment,
+            ):
+                raise ValidationError({
+                    'ended_by': (
+                        'Only an authorized lecturer or administrator can end an appointment.'
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            if self.student_id:
+                self.student_username_snapshot = self.student.username
+                self.student_full_name_snapshot = (
+                    self.student.get_full_name() or self.student.username
+                )
+                self.student_number_snapshot = self.student.student_number
+            if self.appointed_by_id:
+                self.appointed_by_username_snapshot = self.appointed_by.username
+                self.appointed_by_full_name_snapshot = (
+                    self.appointed_by.get_full_name() or self.appointed_by.username
+                )
+        self.full_clean()
         super().save(*args, **kwargs)
 
 
@@ -401,6 +610,10 @@ class Group(models.Model):
         ).count()
 
     def clean(self):
+        if self.assignment_id and self.assignment.assignment_type != Assignment.TYPE_GROUP:
+            raise ValidationError({
+                'assignment': 'Groups can only be created for group assignments.'
+            })
         if self.assignment_id and self.max_members is not None:
             if not self.assignment.min_group_size <= self.max_members <= self.assignment.max_group_size:
                 raise ValidationError({
@@ -482,6 +695,11 @@ class GroupMembership(models.Model):
     def clean(self):
         if self.student_id and self.student.role != User.ROLE_STUDENT:
             raise ValidationError('Only students can join an assignment group.')
+        if (
+            self.group_id
+            and self.group.assignment.assignment_type != Assignment.TYPE_GROUP
+        ):
+            raise ValidationError('Only group assignments can have group memberships.')
         if self.group_id and self.assignment_id != self.group.assignment_id:
             raise ValidationError('The membership assignment must match the group assignment.')
         if (
@@ -522,6 +740,163 @@ class GroupMembership(models.Model):
             self.assignment_id = self.group.assignment_id
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+class GroupMembershipEventQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Group membership events are immutable.')
+
+    def delete(self):
+        raise ValidationError('Group membership events cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Create group membership events individually for validation.')
+
+
+class GroupMembershipEvent(models.Model):
+    ACTION_ADDED = 'added'
+    ACTION_APPROVED = 'approved'
+    ACTION_REMOVED = 'removed'
+    ACTION_TRANSFERRED = 'transferred'
+    ACTION_REJECTED = 'rejected'
+    ACTION_INVITED = 'invited'
+    ACTION_CHOICES = [
+        (ACTION_ADDED, 'Added'),
+        (ACTION_APPROVED, 'Approved'),
+        (ACTION_REMOVED, 'Removed'),
+        (ACTION_TRANSFERRED, 'Transferred'),
+        (ACTION_REJECTED, 'Rejected'),
+        (ACTION_INVITED, 'Invited'),
+    ]
+
+    assignment = models.ForeignKey(
+        Assignment,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='membership_events',
+    )
+    group = models.ForeignKey(
+        Group,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='membership_events',
+    )
+    previous_group = models.ForeignKey(
+        Group,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='membership_transfers_from',
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='group_membership_events',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='group_membership_events_performed',
+    )
+    action = models.CharField(max_length=12, choices=ACTION_CHOICES)
+    occurred_at = models.DateTimeField(auto_now_add=True)
+    assignment_title_snapshot = models.CharField(max_length=200, blank=True)
+    group_name_snapshot = models.CharField(max_length=100, blank=True)
+    previous_group_name_snapshot = models.CharField(max_length=100, blank=True)
+    student_username_snapshot = models.CharField(max_length=150, blank=True)
+    student_full_name_snapshot = models.CharField(max_length=255, blank=True)
+    student_number_snapshot = models.CharField(max_length=50, blank=True)
+    actor_username_snapshot = models.CharField(max_length=150, blank=True)
+    actor_full_name_snapshot = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['-occurred_at']
+        indexes = [
+            models.Index(fields=['assignment', 'occurred_at']),
+            models.Index(fields=['group', 'occurred_at']),
+        ]
+
+    objects = GroupMembershipEventQuerySet.as_manager()
+
+    def clean(self):
+        if self.group_id and not self.assignment_id:
+            group = Group.objects.filter(pk=self.group_id).first()
+            if group is None:
+                raise ValidationError({'group': 'The selected group does not exist.'})
+            self.assignment_id = group.assignment_id
+        assignment = Assignment.objects.filter(pk=self.assignment_id).first()
+        group = Group.objects.filter(pk=self.group_id).first()
+        student = User.objects.filter(pk=self.student_id).first()
+        actor = User.objects.filter(pk=self.actor_id).first()
+        if assignment is None:
+            raise ValidationError({'assignment': 'A valid assignment is required for an event.'})
+        if group is None:
+            raise ValidationError({'group': 'A valid group is required for an event.'})
+        if student is None:
+            raise ValidationError({'student': 'A valid student is required for an event.'})
+        if actor is None:
+            raise ValidationError({'actor': 'A valid actor is required for an event.'})
+        if (
+            self.assignment_id
+            and self.group_id
+            and group.assignment_id != self.assignment_id
+        ):
+            raise ValidationError('The event assignment must match its group.')
+        if self.action not in dict(self.ACTION_CHOICES):
+            raise ValidationError({'action': 'Select a valid membership action.'})
+        if self.action == self.ACTION_TRANSFERRED:
+            if not self.previous_group_id:
+                raise ValidationError({
+                    'previous_group': 'A transfer must record the previous group.'
+                })
+            if self.previous_group_id == self.group_id:
+                raise ValidationError({
+                    'group': 'The destination group must differ from the previous group.'
+                })
+            previous_group = Group.objects.filter(pk=self.previous_group_id).first()
+            if previous_group is None or previous_group.assignment_id != self.assignment_id:
+                raise ValidationError({
+                    'previous_group': 'The previous group must belong to this assignment.'
+                })
+        elif self.previous_group_id:
+            raise ValidationError({
+                'previous_group': 'Only transfer events can record a previous group.'
+            })
+        if student.role != User.ROLE_STUDENT:
+            raise ValidationError('Membership events must refer to a student.')
+        if not CourseEnrolment.objects.filter(
+            course_id=self.assignment.course_id,
+            student_id=self.student_id,
+        ).exists():
+            raise ValidationError('Membership events must refer to an enrolled student.')
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError('Group membership events are immutable.')
+        self.full_clean()
+        self.assignment_title_snapshot = Assignment.objects.get(
+            pk=self.assignment_id
+        ).title
+        self.group_name_snapshot = Group.objects.get(pk=self.group_id).name
+        if self.previous_group_id:
+            self.previous_group_name_snapshot = Group.objects.get(
+                pk=self.previous_group_id
+            ).name
+        student = User.objects.get(pk=self.student_id)
+        actor = User.objects.get(pk=self.actor_id)
+        self.student_username_snapshot = student.username
+        self.student_full_name_snapshot = (
+            student.get_full_name() or student.username
+        )
+        self.student_number_snapshot = student.student_number
+        self.actor_username_snapshot = actor.username
+        self.actor_full_name_snapshot = actor.get_full_name() or actor.username
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Group membership events cannot be deleted.')
 
 
 class Task(models.Model):
@@ -835,7 +1210,18 @@ class Submission(models.Model):
         (STATUS_UNDER_REVIEW, 'Under Review'),
         (STATUS_FEEDBACK_PUBLISHED, 'Feedback Published'),
     ]
-    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='submissions')
+    assignment = models.ForeignKey(
+        Assignment,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    group = models.ForeignKey(
+        Group,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='submissions',
+    )
     submitted_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -857,30 +1243,74 @@ class Submission(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=['group'],
-                condition=models.Q(is_latest=True),
+                condition=models.Q(is_latest=True, group__isnull=False),
                 name='one_latest_submission_per_group',
             ),
+            models.UniqueConstraint(
+                fields=['assignment', 'submitted_by'],
+                condition=models.Q(is_latest=True, group__isnull=True),
+                name='one_latest_individual_submission',
+            ),
         ]
-
-    @property
-    def assignment(self):
-        return self.group.assignment
 
     @property
     def is_late(self):
         return bool(
             self.submitted_at
-            and self.group_id
             and self.submitted_at > self.assignment.deadline
         )
 
+    def clean_fields(self, exclude=None):
+        if self.group_id and not self.assignment_id:
+            group = Group.objects.filter(pk=self.group_id).first()
+            if group:
+                self.assignment_id = group.assignment_id
+        super().clean_fields(exclude=exclude)
+
     def clean(self):
-        if self.group_id and self.submitted_by_id and not GroupMembership.objects.filter(
-            group_id=self.group_id,
-            student_id=self.submitted_by_id,
-            status=GroupMembership.STATUS_APPROVED,
-        ).exists():
-            raise ValidationError('Only an approved group member can submit on behalf of the group.')
+        if self.group_id and not self.assignment_id:
+            group = Group.objects.filter(pk=self.group_id).first()
+            if group is None:
+                raise ValidationError({'group': 'The selected group does not exist.'})
+            self.assignment_id = group.assignment_id
+        if not self.assignment_id:
+            return
+        if self.group_id:
+            if self.group.assignment_id != self.assignment_id:
+                raise ValidationError('The submission assignment must match its group.')
+            if self.assignment.assignment_type != Assignment.TYPE_GROUP:
+                raise ValidationError('Individual assignments do not accept group submissions.')
+            if self.submitted_by_id and not GroupMembership.objects.filter(
+                group_id=self.group_id,
+                student_id=self.submitted_by_id,
+                status=GroupMembership.STATUS_APPROVED,
+            ).exists():
+                raise ValidationError(
+                    'Only an approved group member can submit on behalf of the group.'
+                )
+        else:
+            if self.assignment.assignment_type != Assignment.TYPE_INDIVIDUAL:
+                raise ValidationError('Group assignments require a group submission.')
+            if self.submitted_by_id:
+                if self.submitted_by.role != User.ROLE_STUDENT:
+                    raise ValidationError('Only students can submit an individual assignment.')
+                if not CourseEnrolment.objects.filter(
+                    course_id=self.assignment.course_id,
+                    student_id=self.submitted_by_id,
+                ).exists():
+                    raise ValidationError(
+                        'The student must be enrolled in the assignment course.'
+                    )
+
+    def save(self, *args, **kwargs):
+        if self.group_id:
+            if self.assignment_id and self.assignment_id != self.group.assignment_id:
+                raise ValidationError('The submission assignment must match its group.')
+            self.assignment_id = self.group.assignment_id
+        if not self.assignment_id:
+            raise ValidationError({'assignment': 'A submission must belong to an assignment.'})
+        self.clean()
+        super().save(*args, **kwargs)
 
 class Grade(models.Model):
     submission = models.OneToOneField(Submission, on_delete=models.CASCADE, related_name='grade')

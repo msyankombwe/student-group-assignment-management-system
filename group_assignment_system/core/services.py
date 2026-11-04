@@ -1,11 +1,16 @@
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 
 from .models import (
     ActivityLog,
+    Assignment,
+    AssignmentClassRepresentative,
     AuditLog,
     ContributionActivity,
+    CourseEnrolment,
     Group,
     GroupMembership,
     Notification,
@@ -116,6 +121,70 @@ def user_manages_course(user, course):
 
 def user_manages_assignment(user, assignment):
     return user_manages_course(user, assignment.course)
+
+
+def user_is_assignment_representative(user, assignment):
+    return bool(
+        user.is_authenticated
+        and user.is_active
+        and user.is_student()
+        and assignment.assignment_type == Assignment.TYPE_GROUP
+        and AssignmentClassRepresentative.objects.filter(
+            assignment=assignment,
+            student=user,
+            status=AssignmentClassRepresentative.STATUS_ACTIVE,
+        ).exists()
+        and CourseEnrolment.objects.filter(
+            course_id=assignment.course_id,
+            student=user,
+        ).exists()
+    )
+
+
+def user_can_appoint_assignment_representative(user, assignment):
+    return bool(
+        user.is_authenticated
+        and user.is_active
+        and (user.is_admin_role() or user.is_superuser or user.is_lecturer())
+        and assignment.assignment_type == Assignment.TYPE_GROUP
+        and user_manages_assignment(user, assignment)
+    )
+
+
+@transaction.atomic
+def appoint_assignment_class_representative(actor, assignment, student):
+    locked_assignment = Assignment.objects.select_for_update().get(pk=assignment.pk)
+    if not user_can_appoint_assignment_representative(actor, locked_assignment):
+        raise ValidationError(
+            'Only an administrator or an authorized lecturer can appoint a representative.'
+        )
+
+    active_appointment = AssignmentClassRepresentative.objects.select_for_update().filter(
+        assignment=locked_assignment,
+        status=AssignmentClassRepresentative.STATUS_ACTIVE,
+    ).first()
+    if active_appointment:
+        active_appointment.status = AssignmentClassRepresentative.STATUS_REPLACED
+        active_appointment.ended_at = timezone.now()
+        active_appointment.ended_by = actor
+        active_appointment.save()
+
+    return AssignmentClassRepresentative.objects.create(
+        assignment=locked_assignment,
+        student=student,
+        appointed_by=actor,
+    )
+
+
+def user_can_manage_assignment_groups(user, assignment):
+    if not user.is_authenticated or not user.is_active:
+        return False
+    if assignment.assignment_type != Assignment.TYPE_GROUP:
+        return False
+    return user_manages_assignment(user, assignment) or user_is_assignment_representative(
+        user,
+        assignment,
+    )
 
 
 def user_is_group_member(user, group):

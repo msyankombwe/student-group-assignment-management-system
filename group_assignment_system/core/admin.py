@@ -18,6 +18,7 @@ from .models import (
     Grade,
     Group,
     GroupMembership,
+    GroupMembershipEvent,
     GroupMessage,
     InternalDeadline,
     LecturerProfile,
@@ -193,6 +194,55 @@ class GroupAdmin(admin.ModelAdmin):
 @admin.register(GroupMembership)
 class GroupMembershipAdmin(admin.ModelAdmin):
     list_display = ('group', 'student', 'status', 'joined_at')
+
+
+@admin.register(GroupMembershipEvent)
+class GroupMembershipEventAdmin(admin.ModelAdmin):
+    list_display = (
+        'action',
+        'assignment_title_snapshot',
+        'group_name_snapshot',
+        'student_number_snapshot',
+        'student_full_name_snapshot',
+        'actor_full_name_snapshot',
+        'occurred_at',
+    )
+    list_filter = ('action', 'occurred_at')
+    search_fields = (
+        'assignment_title_snapshot',
+        'group_name_snapshot',
+        'student_username_snapshot',
+        'student_full_name_snapshot',
+        'student_number_snapshot',
+        'actor_username_snapshot',
+        'actor_full_name_snapshot',
+    )
+    readonly_fields = (
+        'assignment',
+        'group',
+        'previous_group',
+        'student',
+        'actor',
+        'action',
+        'occurred_at',
+        'assignment_title_snapshot',
+        'group_name_snapshot',
+        'previous_group_name_snapshot',
+        'student_username_snapshot',
+        'student_full_name_snapshot',
+        'student_number_snapshot',
+        'actor_username_snapshot',
+        'actor_full_name_snapshot',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Task)

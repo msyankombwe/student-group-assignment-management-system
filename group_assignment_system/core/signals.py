@@ -1,7 +1,14 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
+from django.utils import timezone
 
-from .models import AdministratorProfile, LecturerProfile, StudentProfile, User
+from .models import (
+    AdministratorProfile,
+    AssignmentClassRepresentative,
+    LecturerProfile,
+    StudentProfile,
+    User,
+)
 
 
 @receiver(post_save, sender=User)
@@ -16,3 +23,16 @@ def ensure_role_profile(sender, instance, **kwargs):
     profile_model = profile_models.get(instance.role)
     if profile_model:
         profile_model.objects.get_or_create(user=instance)
+
+
+@receiver(pre_delete, sender=User)
+def close_representative_appointments_for_deleted_user(sender, instance, **kwargs):
+    appointments = AssignmentClassRepresentative.objects.filter(
+        student=instance,
+        status=AssignmentClassRepresentative.STATUS_ACTIVE,
+    ).select_related('student')
+    for appointment in appointments:
+        AssignmentClassRepresentative.objects.filter(pk=appointment.pk).update(
+            status=AssignmentClassRepresentative.STATUS_REMOVED,
+            ended_at=timezone.now(),
+        )

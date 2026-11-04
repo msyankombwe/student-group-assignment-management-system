@@ -3,12 +3,17 @@ import tempfile
 from datetime import timedelta
 from pathlib import Path
 
+import importlib
+from types import SimpleNamespace
+
 from django.conf import settings
+from django.apps import apps
+from django.contrib import admin
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core import mail
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils.dateparse import parse_datetime
@@ -17,6 +22,7 @@ from django.utils import timezone
 from .models import (
     AcademicSession,
     Assignment,
+    AssignmentClassRepresentative,
     AuditLog,
     Course,
     CourseEnrolment,
@@ -24,6 +30,7 @@ from .models import (
     FileDocument,
     Group,
     GroupMembership,
+    GroupMembershipEvent,
     GroupMessage,
     InternalDeadline,
     LecturerProfile,
@@ -38,7 +45,15 @@ from .models import (
     User,
 )
 from .forms import AssignmentForm, GroupDocumentUploadForm
-from .services import record_activity
+from .services import (
+    record_activity,
+    appoint_assignment_class_representative,
+    user_can_manage_assignment_groups,
+    user_can_appoint_assignment_representative,
+    user_can_access_group_content,
+    user_is_assignment_representative,
+    user_manages_assignment,
+)
 
 
 class GroupAssignmentWorkflowTests(TestCase):
@@ -1517,6 +1532,324 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(group.capacity, 4)
         self.assertEqual(group.formation_type, Group.FORMATION_LECTURER)
         self.assertEqual(group.status, Group.STATUS_ACTIVE)
+
+    def test_assignment_type_defaults_to_group_and_representative_is_assignment_scoped(self):
+        self.assertEqual(self.assignment.assignment_type, Assignment.TYPE_GROUP)
+        self.assignment.assignment_type = Assignment.TYPE_INDIVIDUAL
+        with self.assertRaises(ValidationError):
+            self.assignment.save()
+        self.assignment.refresh_from_db()
+
+        appointment = AssignmentClassRepresentative.objects.create(
+            assignment=self.assignment,
+            student=self.student,
+            appointed_by=self.lecturer,
+        )
+
+        self.assertTrue(user_is_assignment_representative(self.student, self.assignment))
+        self.assertTrue(user_can_manage_assignment_groups(self.student, self.assignment))
+        self.assertFalse(user_manages_assignment(self.student, self.assignment))
+        self.assertFalse(user_can_access_group_content(self.student, self.private_group))
+        self.assertFalse(user_can_manage_assignment_groups(self.unassigned_student, self.assignment))
+
+        other_assignment = Assignment.objects.create(
+            course=self.course,
+            title='Different group assignment',
+            description='Another assignment in the same course.',
+            deadline=timezone.now() + timedelta(days=10),
+        )
+        self.assertFalse(user_is_assignment_representative(self.student, other_assignment))
+        self.assertFalse(user_can_manage_assignment_groups(self.student, other_assignment))
+
+        appointment.status = AssignmentClassRepresentative.STATUS_REMOVED
+        appointment.ended_at = timezone.now()
+        appointment.ended_by = self.lecturer
+        appointment.save()
+        self.assertFalse(user_can_manage_assignment_groups(self.student, self.assignment))
+        self.assertTrue(user_can_manage_assignment_groups(self.lecturer, self.assignment))
+        self.assertTrue(user_can_manage_assignment_groups(self.administrator, self.assignment))
+
+    def test_representative_authorization_checks_current_course_enrolment(self):
+        appointment = AssignmentClassRepresentative.objects.create(
+            assignment=self.assignment,
+            student=self.student,
+            appointed_by=self.lecturer,
+        )
+        self.assertTrue(user_can_manage_assignment_groups(self.student, self.assignment))
+        CourseEnrolment.objects.filter(
+            course=self.course,
+            student=self.student,
+        ).delete()
+        self.assertFalse(user_is_assignment_representative(self.student, self.assignment))
+        self.assertFalse(user_can_manage_assignment_groups(self.student, self.assignment))
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AssignmentClassRepresentative.STATUS_ACTIVE)
+        appointment.status = AssignmentClassRepresentative.STATUS_REMOVED
+        appointment.ended_at = timezone.now()
+        appointment.ended_by = self.lecturer
+        appointment.save()
+        self.assertEqual(appointment.status, AssignmentClassRepresentative.STATUS_REMOVED)
+
+    def test_appointing_officer_must_manage_assignment(self):
+        self.assertFalse(
+            user_can_appoint_assignment_representative(
+                self.other_lecturer,
+                self.assignment,
+            )
+        )
+        with self.assertRaises(ValidationError):
+            AssignmentClassRepresentative.objects.create(
+                assignment=self.assignment,
+                student=self.student,
+                appointed_by=self.other_lecturer,
+            )
+        with self.assertRaises(ValidationError):
+            appoint_assignment_class_representative(
+                self.other_lecturer,
+                self.assignment,
+                self.student,
+            )
+
+        appointment = appoint_assignment_class_representative(
+            self.lecturer,
+            self.assignment,
+            self.student,
+        )
+        self.assertEqual(appointment.student, self.student)
+        self.assertEqual(appointment.appointed_by, self.lecturer)
+
+    def test_representative_appointment_validation_handles_missing_references(self):
+        appointment = AssignmentClassRepresentative(
+            student=self.student,
+            appointed_by=self.lecturer,
+        )
+        with self.assertRaisesMessage(ValidationError, 'Select an assignment'):
+            appointment.full_clean()
+
+        appointment.assignment = self.assignment
+        appointment.student = None
+        with self.assertRaisesMessage(ValidationError, 'active appointment requires a student'):
+            appointment.full_clean()
+
+    def test_representative_appointment_requires_enrolled_active_student_and_unique_active_role(self):
+        unenrolled = User.objects.create_user(
+            username='unenrolled-representative',
+            password='test-password',
+            role=User.ROLE_STUDENT,
+        )
+        with self.assertRaises(ValidationError):
+            AssignmentClassRepresentative.objects.create(
+                assignment=self.assignment,
+                student=unenrolled,
+                appointed_by=self.lecturer,
+            )
+
+        appointment = AssignmentClassRepresentative.objects.create(
+            assignment=self.assignment,
+            student=self.student,
+            appointed_by=self.lecturer,
+        )
+        with self.assertRaises(ValidationError):
+            AssignmentClassRepresentative.objects.create(
+                assignment=self.assignment,
+                student=self.peer,
+                appointed_by=self.lecturer,
+            )
+
+        appointment.status = AssignmentClassRepresentative.STATUS_REPLACED
+        appointment.ended_at = timezone.now()
+        appointment.ended_by = self.lecturer
+        appointment.save()
+        replacement = AssignmentClassRepresentative.objects.create(
+            assignment=self.assignment,
+            student=self.peer,
+            appointed_by=self.administrator,
+        )
+        self.assertEqual(replacement.status, AssignmentClassRepresentative.STATUS_ACTIVE)
+
+    def test_deleting_revoked_or_active_representative_preserves_appointment_history(self):
+        revoked = AssignmentClassRepresentative.objects.create(
+            assignment=self.assignment,
+            student=self.student,
+            appointed_by=self.lecturer,
+        )
+        revoked.status = AssignmentClassRepresentative.STATUS_REMOVED
+        revoked.ended_at = timezone.now()
+        revoked.ended_by = self.lecturer
+        revoked.save()
+        revoked_snapshot = (
+            revoked.student_username_snapshot,
+            revoked.student_full_name_snapshot,
+            revoked.student_number_snapshot,
+        )
+        self.student.delete()
+        revoked.refresh_from_db()
+        self.assertIsNone(revoked.student_id)
+        self.assertEqual(revoked.status, AssignmentClassRepresentative.STATUS_REMOVED)
+        self.assertEqual(
+            (
+                revoked.student_username_snapshot,
+                revoked.student_full_name_snapshot,
+                revoked.student_number_snapshot,
+            ),
+            revoked_snapshot,
+        )
+
+        active_student = User.objects.create_user(
+            username='active-representative',
+            password='test-password',
+            role=User.ROLE_STUDENT,
+        )
+        CourseEnrolment.objects.create(course=self.course, student=active_student)
+        active = AssignmentClassRepresentative.objects.create(
+            assignment=self.assignment,
+            student=active_student,
+            appointed_by=self.lecturer,
+        )
+        active_snapshot = active.student_username_snapshot
+        active_student.delete()
+        active.refresh_from_db()
+        self.assertEqual(active.status, AssignmentClassRepresentative.STATUS_REMOVED)
+        self.assertIsNone(active.student_id)
+        self.assertEqual(active.student_username_snapshot, active_snapshot)
+
+    def test_individual_submission_requires_enrolment_and_group_submission_stays_compatible(self):
+        submission = Submission.objects.create(
+            group=self.group,
+            submitted_by=self.student,
+            file=SimpleUploadedFile('group-work.txt', b'group work'),
+        )
+        self.assertEqual(submission.assignment, self.assignment)
+        self.assertEqual(submission.group, self.group)
+
+        individual_assignment = Assignment.objects.create(
+            course=self.course,
+            assignment_type=Assignment.TYPE_INDIVIDUAL,
+            title='Individual work',
+            description='Submit independently.',
+            deadline=timezone.now() + timedelta(days=10),
+        )
+        individual_submission = Submission.objects.create(
+            assignment=individual_assignment,
+            submitted_by=self.student,
+            file=SimpleUploadedFile('individual-work.txt', b'individual work'),
+        )
+        self.assertIsNone(individual_submission.group)
+        self.assertEqual(individual_submission.assignment, individual_assignment)
+
+        unenrolled = User.objects.create_user(
+            username='unenrolled-submitter',
+            password='test-password',
+            role=User.ROLE_STUDENT,
+        )
+        with self.assertRaises(ValidationError):
+            Submission.objects.create(
+                assignment=individual_assignment,
+                submitted_by=unenrolled,
+                file=SimpleUploadedFile('not-enrolled.txt', b'not enrolled'),
+            )
+        with self.assertRaises(ValidationError):
+            Submission.objects.create(
+                assignment=self.assignment,
+                submitted_by=self.student,
+                file=SimpleUploadedFile('missing-group.txt', b'missing group'),
+            )
+
+    def test_group_membership_events_are_validated_and_immutable(self):
+        unenrolled = User.objects.create_user(
+            username='unenrolled-event-student',
+            password='test-password',
+            role=User.ROLE_STUDENT,
+        )
+        event = GroupMembershipEvent.objects.create(
+            assignment=self.assignment,
+            group=self.group,
+            student=self.student,
+            actor=self.lecturer,
+            action=GroupMembershipEvent.ACTION_ADDED,
+        )
+        event.action = GroupMembershipEvent.ACTION_REMOVED
+        with self.assertRaises(ValidationError):
+            event.save()
+        with self.assertRaises(ValidationError):
+            event.delete()
+        with self.assertRaises(ValidationError):
+            GroupMembershipEvent.objects.filter(pk=event.pk).update(
+                action=GroupMembershipEvent.ACTION_REMOVED,
+            )
+        with self.assertRaises(ValidationError):
+            GroupMembershipEvent.objects.filter(pk=event.pk).delete()
+        with self.assertRaises(ValidationError):
+            GroupMembershipEvent.objects.bulk_create([event])
+
+        event_admin = admin.site._registry[GroupMembershipEvent]
+        request = SimpleNamespace(user=self.administrator)
+        self.assertFalse(event_admin.has_add_permission(request))
+        self.assertFalse(event_admin.has_change_permission(request, event))
+        self.assertFalse(event_admin.has_delete_permission(request, event))
+
+        with self.assertRaises(ValidationError):
+            GroupMembershipEvent.objects.create(
+                assignment=self.assignment,
+                group=self.group,
+                student=unenrolled,
+                actor=self.lecturer,
+                action=GroupMembershipEvent.ACTION_ADDED,
+            )
+
+    def test_membership_event_preserves_identity_and_group_transfer_history(self):
+        destination = Group.objects.create(
+            assignment=self.assignment,
+            name='Transfer Destination',
+        )
+        event = GroupMembershipEvent.objects.create(
+            assignment=self.assignment,
+            group=destination,
+            previous_group=self.group,
+            student=self.student,
+            actor=self.student,
+            action=GroupMembershipEvent.ACTION_TRANSFERRED,
+        )
+        self.assertEqual(event.group_name_snapshot, destination.name)
+        self.assertEqual(event.previous_group_name_snapshot, self.group.name)
+        self.assertEqual(event.student_username_snapshot, self.student.username)
+        self.assertEqual(event.actor_username_snapshot, self.student.username)
+
+        student_id = self.student.pk
+        self.student.delete()
+        event.refresh_from_db()
+        self.assertIsNone(event.student_id)
+        self.assertIsNone(event.actor_id)
+        self.assertEqual(event.student_username_snapshot, 'student')
+        self.assertEqual(event.actor_username_snapshot, 'student')
+        self.assertEqual(event.group_name_snapshot, 'Transfer Destination')
+        self.assertEqual(event.previous_group_name_snapshot, 'Team Alpha')
+        self.assertNotEqual(student_id, event.student_id)
+
+    def test_individual_submission_migration_rollback_guard(self):
+        migration = importlib.import_module(
+            'core.migrations.0022_phase2_integrity'
+        )
+        schema_editor = SimpleNamespace(connection=connection)
+        migration.refuse_reverse_with_individual_submissions(apps, schema_editor)
+
+        individual_assignment = Assignment.objects.create(
+            course=self.course,
+            assignment_type=Assignment.TYPE_INDIVIDUAL,
+            title='Rollback guard test',
+            description='Individual submissions prevent a lossy downgrade.',
+            deadline=timezone.now() + timedelta(days=10),
+        )
+        Submission.objects.create(
+            assignment=individual_assignment,
+            submitted_by=self.peer,
+            file=SimpleUploadedFile('rollback-test.txt', b'preserve this'),
+        )
+        with self.assertRaisesMessage(
+            RuntimeError,
+            'Cannot reverse Phase 2 while individual submissions exist',
+        ):
+            migration.refuse_reverse_with_individual_submissions(apps, schema_editor)
 
     def test_student_group_proposals_are_rejected_when_assignment_disallows_them(self):
         self.assignment.allow_student_group_proposals = False
