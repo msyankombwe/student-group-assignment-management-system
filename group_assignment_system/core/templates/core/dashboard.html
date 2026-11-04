@@ -56,6 +56,26 @@
     {% endif %}
 </div>
 
+{% if representative_assignments %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h2 class="h5">Assignments you represent</h2>
+        <div class="d-flex flex-column gap-2">
+            {% for assignment in representative_assignments %}
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 border rounded p-3">
+                    <div>
+                        <strong>{{ assignment.title }}</strong>
+                        <span class="text-secondary">· {{ assignment.course.code|default:assignment.course.name }}</span>
+                        <div class="small text-secondary">{{ assignment.get_status_display }}</div>
+                    </div>
+                    <a class="btn btn-outline-primary" href="{% url 'assignment_group_create' assignment.pk %}">Manage groups</a>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endif %}
+
 <section class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-4" aria-label="Task summary">
     <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Total tasks</div><div class="fs-4">{{ task_metrics.total }}</div></div></div></div>
     <div class="col"><div class="card h-100"><div class="card-body"><div class="text-secondary">Completed</div><div class="fs-4">{{ task_metrics.completed }}</div></div></div></div>

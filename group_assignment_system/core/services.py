@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import (
@@ -13,6 +13,7 @@ from .models import (
     CourseEnrolment,
     Group,
     GroupMembership,
+    GroupMembershipEvent,
     Notification,
     User,
 )
@@ -185,6 +186,111 @@ def user_can_manage_assignment_groups(user, assignment):
         user,
         assignment,
     )
+
+
+@transaction.atomic
+def create_assignment_group(actor, assignment, name, description='', max_members=None, students=()):
+    assignment = Assignment.objects.select_for_update().select_related('course').get(
+        pk=assignment.pk,
+    )
+    if not user_can_manage_assignment_groups(actor, assignment):
+        raise ValidationError(
+            'You are not authorized to create groups for this assignment.'
+        )
+    if not assignment.course.is_active:
+        raise ValidationError('Groups cannot be created for an inactive course.')
+    if assignment.status == Assignment.STATUS_CLOSED:
+        raise ValidationError('Groups cannot be created for a closed assignment.')
+
+    students = list(students)
+    student_ids = [student.pk for student in students]
+    if len(student_ids) != len(set(student_ids)):
+        raise ValidationError('A student can only be selected once.')
+    eligible_students = User.objects.filter(
+        pk__in=student_ids,
+        role=User.ROLE_STUDENT,
+        is_active=True,
+        course_enrolments__course_id=assignment.course_id,
+    ).distinct()
+    if eligible_students.count() != len(student_ids):
+        raise ValidationError(
+            'Every selected student must be active and enrolled in the assignment course.'
+        )
+
+    capacity = (
+        assignment.max_group_size
+        if max_members is None
+        else max_members
+    )
+    if not assignment.min_group_size <= capacity <= assignment.max_group_size:
+        raise ValidationError({
+            'max_members': (
+                'Group capacity must respect the assignment size limits '
+                f'({assignment.min_group_size}–{assignment.max_group_size}).'
+            )
+        })
+    if len(student_ids) > capacity:
+        raise ValidationError({
+            'students': 'The selected students exceed the maximum group capacity.'
+        })
+    existing_memberships = GroupMembership.objects.filter(
+        assignment=assignment,
+        student_id__in=student_ids,
+    ).exclude(status=GroupMembership.STATUS_REJECTED)
+    if existing_memberships.exists():
+        raise ValidationError({
+            'students': 'A selected student already has a group or request for this assignment.'
+        })
+
+    try:
+        with transaction.atomic():
+            group = Group.objects.create(
+                assignment=assignment,
+                name=name,
+                description=description,
+                max_members=capacity,
+                created_by=actor,
+                formation_type=Group.FORMATION_LECTURER,
+                status=Group.STATUS_ACTIVE,
+            )
+            for student in students:
+                membership = GroupMembership.objects.filter(
+                    assignment=assignment,
+                    student=student,
+                    status=GroupMembership.STATUS_REJECTED,
+                ).first()
+                if membership:
+                    membership.group = group
+                    membership.status = GroupMembership.STATUS_APPROVED
+                    membership.invited_by = None
+                else:
+                    membership = GroupMembership(
+                        assignment=assignment,
+                        group=group,
+                        student=student,
+                        status=GroupMembership.STATUS_APPROVED,
+                    )
+                membership.save()
+                GroupMembershipEvent.objects.create(
+                    assignment=assignment,
+                    group=group,
+                    student=student,
+                    actor=actor,
+                    action=GroupMembershipEvent.ACTION_ADDED,
+                )
+                GroupMembershipEvent.objects.create(
+                    assignment=assignment,
+                    group=group,
+                    student=student,
+                    actor=actor,
+                    action=GroupMembershipEvent.ACTION_APPROVED,
+                )
+            return group
+    except IntegrityError as error:
+        raise ValidationError(
+            'A selected student was allocated to another group at the same time. '
+            'Refresh the page and try again.'
+        ) from error
 
 
 def user_is_group_member(user, group):

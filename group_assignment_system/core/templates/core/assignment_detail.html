@@ -14,7 +14,7 @@
     </div>
     {% if can_manage %}
         <div class="d-flex flex-wrap gap-2">
-            <a class="btn btn-outline-primary" href="{% url 'assignment_group_create' assignment.pk %}">Create group</a>
+            {% if can_create_groups %}<a class="btn btn-outline-primary" href="{% url 'assignment_group_create' assignment.pk %}">Create group</a>{% endif %}
             <a class="btn btn-primary" href="{% url 'assignment_edit' assignment.pk %}">Edit / manage</a>
             <a class="btn btn-outline-primary" href="{% url 'submission_list' %}?assignment={{ assignment.pk }}">Review submissions</a>
             <a class="btn btn-outline-secondary" href="{% url 'reports' %}?type=contribution&amp;assignment={{ assignment.pk }}">Participation</a>
@@ -22,12 +22,17 @@
                 <a class="btn btn-outline-secondary" href="{% url 'peer_evaluation_report' assignment.pk %}">Peer evaluation report</a>
             {% endif %}
         </div>
+    {% elif can_create_groups %}
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-outline-primary" href="{% url 'assignment_group_create' assignment.pk %}">Create group</a>
+        </div>
     {% endif %}
 </div>
 <div class="row g-3">
     <div class="col-lg-8">
         <section class="card shadow-sm mb-3">
             <div class="card-body">
+                {% if show_assignment_content %}
                 <h2 class="h5">Instructions</h2>
                 <div>{{ assignment.description|linebreaks }}</div>
                 <h2 class="h5 mt-4">Objectives</h2>
@@ -48,19 +53,28 @@
                         </ul>
                     </section>
                 {% endif %}
+                {% else %}
+                    <p class="mb-0 text-secondary">Assignment instructions remain unavailable until publication.</p>
+                {% endif %}
             </div>
         </section>
         <section class="card shadow-sm">
             <div class="card-body">
                 <h2 class="h5">Group formation and progress</h2>
-                {% if can_manage %}
+                {% if can_view_group_formation %}
                     <div class="table-responsive">
                         <table class="table align-middle mb-0">
                             <thead><tr><th>Group</th><th>Members</th><th>Leader</th><th>Progress</th><th>Status</th></tr></thead>
                             <tbody>
                                 {% for group in groups %}
                                     <tr>
-                                        <td><a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a></td>
+                                        <td>
+                                            {% if can_manage %}
+                                                <a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a>
+                                            {% else %}
+                                                {{ group.name }}
+                                            {% endif %}
+                                        </td>
                                         <td>{{ group.member_count }}/{{ group.capacity }}</td>
                                         <td>{% if group.leader %}{{ group.leader.get_full_name|default:group.leader.username }}{% else %}Not assigned{% endif %}</td>
                                         <td>

@@ -13,7 +13,11 @@ from .models import (
     TaskUpdate,
     User,
 )
-from .services import user_manages_course
+from .services import (
+    create_assignment_group,
+    user_can_manage_assignment_groups,
+    user_manages_course,
+)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -277,6 +281,12 @@ class AssignmentSerializer(serializers.ModelSerializer):
 
 class GroupSerializer(serializers.ModelSerializer):
     members = serializers.SerializerMethodField()
+    initial_students = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=User.objects.filter(role=User.ROLE_STUDENT, is_active=True),
+        required=False,
+        write_only=True,
+    )
     progress = serializers.SerializerMethodField()
     assignment_title = serializers.CharField(source='assignment.title', read_only=True)
     course_id = serializers.IntegerField(source='assignment.course_id', read_only=True)
@@ -292,6 +302,7 @@ class GroupSerializer(serializers.ModelSerializer):
             'name',
             'description',
             'max_members',
+            'initial_students',
             'leader',
             'formation_type',
             'status',
@@ -319,8 +330,16 @@ class GroupSerializer(serializers.ModelSerializer):
         )
 
     def get_members(self, group):
-        return [
-            {
+        request = self.context.get('request')
+        can_view_identifiers = bool(
+            request
+            and user_can_manage_assignment_groups(request.user, group.assignment)
+        )
+        members = []
+        for membership in group.memberships.all():
+            if membership.status != GroupMembership.STATUS_APPROVED:
+                continue
+            member = {
                 'id': membership.student_id,
                 'username': membership.student.username,
                 'full_name': (
@@ -329,9 +348,17 @@ class GroupSerializer(serializers.ModelSerializer):
                 ),
                 'is_leader': membership.student_id == group.leader_id,
             }
-            for membership in group.memberships.all()
-            if membership.status == GroupMembership.STATUS_APPROVED
-        ]
+            if can_view_identifiers:
+                member.update({
+                    'student_number': (
+                        membership.student.student_number
+                        or 'Student ID Not Provided'
+                    ),
+                    'programme': membership.student.programme,
+                    'course_registration_status': 'Registered',
+                })
+            members.append(member)
+        return members
 
     def get_progress(self, group):
         tasks = list(group.tasks.all())
@@ -342,11 +369,21 @@ class GroupSerializer(serializers.ModelSerializer):
 
     def validate_assignment(self, assignment):
         user = self.context['request'].user
-        if user.is_lecturer() and not user_manages_course(user, assignment.course):
-            raise serializers.ValidationError('You can only manage groups for your courses.')
+        if not user_can_manage_assignment_groups(user, assignment):
+            raise serializers.ValidationError(
+                'You can only create groups for assignments you are authorized to manage.'
+            )
         return assignment
 
     def validate(self, attrs):
+        if self.instance and attrs.get('initial_students'):
+            raise serializers.ValidationError(
+                {
+                    'initial_students': (
+                        'Initial allocations are only accepted when creating a group.'
+                    )
+                }
+            )
         group_max = attrs.get(
             'max_members',
             getattr(self.instance, 'max_members', None),
@@ -361,6 +398,21 @@ class GroupSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'max_members': 'Group capacity must respect the assignment size limits.'}
             )
+        students = attrs.get('initial_students', ())
+        if assignment:
+            capacity = (
+                assignment.max_group_size
+                if group_max is None
+                else group_max
+            )
+            if len(students) > capacity:
+                raise serializers.ValidationError(
+                    {
+                        'initial_students': (
+                            'The selected students exceed the maximum group capacity.'
+                        )
+                    }
+                )
         if (
             self.instance
             and group_max is not None
@@ -370,6 +422,14 @@ class GroupSerializer(serializers.ModelSerializer):
                 {'max_members': 'Capacity cannot be lower than current members and invitations.'}
             )
         return attrs
+
+    def create(self, validated_data):
+        students = validated_data.pop('initial_students', ())
+        return create_assignment_group(
+            actor=self.context['request'].user,
+            students=students,
+            **validated_data,
+        )
 
 
 class TaskSerializer(serializers.ModelSerializer):

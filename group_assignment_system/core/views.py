@@ -9,7 +9,7 @@ from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, F, Max, Prefetch, Q
 from django.middleware.csrf import get_token
-from django.http import FileResponse, HttpResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.text import get_valid_filename
@@ -45,11 +45,13 @@ from .models import (
     Assignment,
     AuditLog,
     Course,
+    CourseEnrolment,
     ContributionActivity,
     FileDocument,
     Grade,
     Group,
     GroupMembership,
+    GroupMembershipEvent,
     GroupMessage,
     Notification,
     PeerReview,
@@ -59,6 +61,7 @@ from .models import (
     User,
 )
 from .permissions import (
+    GroupManagementPermission,
     ScopedRolePermission,
     SystemAdministratorPermission,
     TaskManagementPermission,
@@ -74,11 +77,13 @@ from .serializers import (
 )
 from .services import (
     can_manage_academic,
+    create_assignment_group,
     log_audit,
     notify,
     record_activity,
     user_can_access_group,
     user_can_access_group_content,
+    user_can_manage_assignment_groups,
     user_is_group_member,
     user_manages_course,
     user_manages_assignment,
@@ -214,7 +219,17 @@ class AdminActivityAPIView(APIView):
         ])
 
 
-def _set_group_membership(group, student, status, invited_by=None):
+def _record_group_membership_event(actor, membership, action):
+    return GroupMembershipEvent.objects.create(
+        assignment=membership.assignment,
+        group=membership.group,
+        student=membership.student,
+        actor=actor,
+        action=action,
+    )
+
+
+def _set_group_membership(group, student, status, actor, invited_by=None):
     membership = GroupMembership.objects.filter(
         assignment=group.assignment,
         student=student,
@@ -231,6 +246,12 @@ def _set_group_membership(group, student, status, invited_by=None):
     membership.status = status
     membership.invited_by = invited_by
     membership.save()
+    action = (
+        GroupMembershipEvent.ACTION_INVITED
+        if status == GroupMembership.STATUS_INVITED
+        else GroupMembershipEvent.ACTION_ADDED
+    )
+    _record_group_membership_event(actor, membership, action)
     return membership
 
 
@@ -375,6 +396,7 @@ def _notify_assignment_published(assignment):
 def dashboard(request):
     user = request.user
     can_manage = can_manage_academic(user)
+    representative_assignments = Assignment.objects.none()
 
     if user.is_admin_role():
         dashboard_role = 'administrator'
@@ -424,6 +446,14 @@ def dashboard(request):
         )
     else:
         dashboard_role = 'student'
+        representative_assignments = Assignment.objects.filter(
+            assignment_type=Assignment.TYPE_GROUP,
+            status__in=(Assignment.STATUS_DRAFT, Assignment.STATUS_PUBLISHED),
+            course__is_active=True,
+            representative_appointments__student=user,
+            representative_appointments__status='active',
+            course__enrolments__student=user,
+        ).select_related('course').distinct().order_by('deadline')
         group_requests = GroupMembership.objects.filter(
             student=user,
             status__in=(GroupMembership.STATUS_PENDING, GroupMembership.STATUS_INVITED),
@@ -527,6 +557,7 @@ def dashboard(request):
         'task_metrics': task_metrics,
         'notifications': notifications,
         'can_manage': can_manage,
+        'representative_assignments': representative_assignments,
         'overdue_tasks': overdue_tasks,
         'upcoming_tasks': upcoming_tasks,
         'delayed_groups': delayed_groups,
@@ -1216,6 +1247,12 @@ def assignment_detail(request, pk):
     manages = user.is_admin_role() or (
         user.is_lecturer() and user_manages_assignment(user, assignment)
     )
+    can_create_groups = (
+        assignment.status != Assignment.STATUS_CLOSED
+        and assignment.course.is_active
+        and user_can_manage_assignment_groups(user, assignment)
+    )
+    representative_access = can_create_groups and user.is_student()
     enrolled = assignment.course.enrolments.filter(student=user).exists()
     is_group_member = GroupMembership.objects.filter(
         group__assignment=assignment,
@@ -1223,7 +1260,7 @@ def assignment_detail(request, pk):
         status=GroupMembership.STATUS_APPROVED,
         group__status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
     ).exists()
-    if not manages and not (
+    if not manages and not representative_access and not (
         assignment.course.is_active
         and assignment.is_published()
         and (enrolled or is_group_member)
@@ -1277,6 +1314,11 @@ def assignment_detail(request, pk):
                             status=GroupMembership.STATUS_PENDING,
                         )
                     membership.save()
+                    _record_group_membership_event(
+                        request.user,
+                        membership,
+                        GroupMembershipEvent.ACTION_ADDED,
+                    )
                     group.leader = request.user
                     group.save()
                     for invitee in proposal_form.cleaned_data['invitees']:
@@ -1284,6 +1326,7 @@ def assignment_detail(request, pk):
                             group,
                             invitee,
                             GroupMembership.STATUS_INVITED,
+                            actor=request.user,
                             invited_by=request.user,
                         )
                         notify(
@@ -1327,6 +1370,7 @@ def assignment_detail(request, pk):
                     group,
                     request.user,
                     GroupMembership.STATUS_PENDING,
+                    actor=request.user,
                 )
             if assignment.course.lecturer:
                 notify(
@@ -1362,7 +1406,7 @@ def assignment_detail(request, pk):
         group__assignment=assignment,
         student=user,
     ).exclude(status=GroupMembership.STATUS_REJECTED).select_related('group')
-    if not manages:
+    if not (manages or representative_access):
         groups = groups.filter(
             memberships__student=user,
             memberships__status__in=(
@@ -1402,6 +1446,9 @@ def assignment_detail(request, pk):
         'can_propose_group': can_propose_group,
         'proposal_form': proposal_form,
         'can_manage': manages,
+        'can_create_groups': can_create_groups,
+        'can_view_group_formation': manages or representative_access,
+        'show_assignment_content': manages or assignment.is_published(),
     })
 
 
@@ -1473,6 +1520,15 @@ def assignment_create(request):
 
 @login_required
 def group_create(request):
+    if not can_manage_academic(request.user) and not Assignment.objects.filter(
+        assignment_type=Assignment.TYPE_GROUP,
+        status__in=(Assignment.STATUS_DRAFT, Assignment.STATUS_PUBLISHED),
+        course__is_active=True,
+        representative_appointments__student=request.user,
+        representative_appointments__status='active',
+        course__enrolments__student=request.user,
+    ).exists():
+        return _forbidden(request)
     return _group_create(request)
 
 
@@ -1481,49 +1537,116 @@ def assignment_group_create(request, assignment_id):
     assignment = get_object_or_404(
         Assignment.objects.select_related('course'),
         pk=assignment_id,
-        status=Assignment.STATUS_PUBLISHED,
-        published_at__lte=timezone.now(),
-        course__is_active=True,
     )
-    if not (
-        request.user.is_admin_role()
-        or (
-            request.user.is_lecturer()
-            and user_manages_assignment(request.user, assignment)
-        )
+    if (
+        assignment.status == Assignment.STATUS_CLOSED
+        or not assignment.course.is_active
+        or not user_can_manage_assignment_groups(request.user, assignment)
     ):
         return _forbidden(request)
     return _group_create(request, assignment=assignment)
 
 
-def _group_create(request, assignment=None):
-    if not can_manage_academic(request.user):
+@login_required
+@require_http_methods(['GET'])
+def assignment_group_students(request, assignment_id):
+    assignment = get_object_or_404(
+        Assignment.objects.select_related('course'),
+        pk=assignment_id,
+    )
+    if (
+        assignment.status == Assignment.STATUS_CLOSED
+        or not assignment.course.is_active
+        or not user_can_manage_assignment_groups(request.user, assignment)
+    ):
         return _forbidden(request)
+
+    allocated_students = GroupMembership.objects.filter(
+        assignment=assignment,
+    ).exclude(
+        status=GroupMembership.STATUS_REJECTED,
+    ).values('student_id')
+    students = User.objects.filter(
+        role=User.ROLE_STUDENT,
+        is_active=True,
+        course_enrolments__course=assignment.course,
+    ).exclude(
+        pk__in=allocated_students,
+    ).order_by('last_name', 'first_name', 'username').distinct()
+    return JsonResponse({
+        'students': [
+            {
+                'id': student.pk,
+                'student_id': student.student_number or 'Student ID Not Provided',
+                'full_name': student.get_full_name() or student.username,
+                'programme': student.programme,
+                'registration_status': 'Registered',
+            }
+            for student in students
+        ],
+        'assignment_min_group_size': assignment.min_group_size,
+        'assignment_max_group_size': assignment.max_group_size,
+    })
+
+
+def _group_create(request, assignment=None):
     initial = {'assignment': assignment} if assignment else None
     form = GroupForm(
         request.POST or None,
-        lecturer=request.user,
+        actor=request.user,
         initial=initial,
     )
     if request.method == 'POST' and form.is_valid():
-        group = form.save(commit=False)
-        if not user_manages_assignment(request.user, group.assignment) and not request.user.is_admin_role():
-            return _forbidden(request)
-        group.created_by = request.user
-        group.formation_type = Group.FORMATION_LECTURER
-        group.status = Group.STATUS_ACTIVE
-        group.save()
-        log_audit(request.user, f'Created group {group.name}')
-        record_activity(
-            request.user,
-            'group_created',
-            f'Created group {group.name}',
-            assignment=group.assignment,
-            group=group,
-        )
-        messages.success(request, 'Group created.')
-        return redirect('group_detail', group.pk)
-    return render(request, 'core/form.html', {'title': 'Create group', 'form': form})
+        try:
+            group = create_assignment_group(
+                actor=request.user,
+                assignment=form.cleaned_data['assignment'],
+                name=form.cleaned_data['name'],
+                description=form.cleaned_data['description'],
+                max_members=form.cleaned_data['max_members'],
+                students=form.cleaned_data['students'],
+            )
+        except ValidationError as error:
+            form.add_error(None, ValidationError(error.messages))
+        else:
+            for student in form.cleaned_data['students']:
+                notify(
+                    student,
+                    f'You were allocated to {group.name} for {group.assignment.title}.',
+                    Notification.TYPE_MEMBERSHIP,
+                    assignment=group.assignment,
+                    group=group,
+                )
+            log_audit(request.user, f'Created group {group.name}')
+            record_activity(
+                request.user,
+                'group_created',
+                f'Created group {group.name}',
+                assignment=group.assignment,
+                group=group,
+            )
+            for student in form.cleaned_data['students']:
+                record_activity(
+                    request.user,
+                    'membership_added',
+                    f'Allocated {student.username} to {group.name}',
+                    assignment=group.assignment,
+                    group=group,
+                    contributor=student,
+                )
+            messages.success(request, 'Group created and selected students allocated.')
+            if request.user.is_student():
+                return redirect('assignment_detail', group.assignment_id)
+            return redirect('group_detail', group.pk)
+    selected_student_ids = (
+        request.POST.getlist('students') if request.method == 'POST' else []
+    )
+    return render(request, 'core/group_form.html', {
+        'title': 'Create group',
+        'form': form,
+        'eligible_students': form.fields['students'].queryset,
+        'selected_student_ids': selected_student_ids,
+    })
 
 
 @login_required
@@ -1603,6 +1726,11 @@ def group_detail(request, pk):
                 for membership in pending_members:
                     membership.status = GroupMembership.STATUS_APPROVED
                     membership.save()
+                    _record_group_membership_event(
+                        request.user,
+                        membership,
+                        GroupMembershipEvent.ACTION_APPROVED,
+                    )
                     notify(
                         membership.student,
                         f'Your group {group.name} for {group.assignment.title} was approved.',
@@ -1644,6 +1772,11 @@ def group_detail(request, pk):
                     pk__in=[membership.pk for membership in pending_members]
                 ).update(status=GroupMembership.STATUS_REJECTED)
                 for membership in pending_members:
+                    _record_group_membership_event(
+                        request.user,
+                        membership,
+                        GroupMembershipEvent.ACTION_REJECTED,
+                    )
                     notify(
                         membership.student,
                         f'The proposed group {group.name} was not approved.',
@@ -1666,6 +1799,11 @@ def group_detail(request, pk):
                 )
                 membership.status = GroupMembership.STATUS_APPROVED
                 membership.save()
+                _record_group_membership_event(
+                    request.user,
+                    membership,
+                    GroupMembershipEvent.ACTION_APPROVED,
+                )
                 if not group.leader_id:
                     group.leader = membership.student
                     group.save()
@@ -1691,8 +1829,14 @@ def group_detail(request, pk):
                     GroupMembership.STATUS_INVITED,
                 ),
             )
-            membership.status = GroupMembership.STATUS_REJECTED
-            membership.save()
+            with transaction.atomic():
+                membership.status = GroupMembership.STATUS_REJECTED
+                membership.save()
+                _record_group_membership_event(
+                    request.user,
+                    membership,
+                    GroupMembershipEvent.ACTION_REJECTED,
+                )
             notify(
                 membership.student,
                 f'Your request to join {group.name} was not approved.',
@@ -1720,6 +1864,11 @@ def group_detail(request, pk):
                     ).exclude(pk=membership.pk).order_by('joined_at', 'pk').first()
                     group.leader = next_leader.student if next_leader else None
                     group.save()
+                _record_group_membership_event(
+                    request.user,
+                    membership,
+                    GroupMembershipEvent.ACTION_REMOVED,
+                )
                 membership.delete()
             notify(
                 removed_student,
@@ -1751,6 +1900,7 @@ def group_detail(request, pk):
                                 group,
                                 invited_student,
                                 GroupMembership.STATUS_INVITED,
+                                actor=request.user,
                                 invited_by=request.user,
                             )
                 except ValidationError as error:
@@ -1776,9 +1926,18 @@ def group_detail(request, pk):
         elif 'accept_invitation' in request.POST:
             if not own_membership or own_membership.status != GroupMembership.STATUS_INVITED:
                 return _forbidden(request)
-            own_membership.status = GroupMembership.STATUS_PENDING
-            own_membership.invited_by = None
-            own_membership.save()
+            with transaction.atomic():
+                own_membership = GroupMembership.objects.select_for_update().get(
+                    pk=own_membership.pk,
+                )
+                own_membership.status = GroupMembership.STATUS_PENDING
+                own_membership.invited_by = None
+                own_membership.save()
+                _record_group_membership_event(
+                    request.user,
+                    own_membership,
+                    GroupMembershipEvent.ACTION_ADDED,
+                )
             if group.assignment.course.lecturer:
                 notify(
                     group.assignment.course.lecturer,
@@ -1790,8 +1949,14 @@ def group_detail(request, pk):
         elif 'decline_invitation' in request.POST:
             if not own_membership or own_membership.status != GroupMembership.STATUS_INVITED:
                 return _forbidden(request)
-            own_membership.status = GroupMembership.STATUS_REJECTED
-            own_membership.save()
+            with transaction.atomic():
+                own_membership.status = GroupMembership.STATUS_REJECTED
+                own_membership.save()
+                _record_group_membership_event(
+                    request.user,
+                    own_membership,
+                    GroupMembershipEvent.ACTION_REJECTED,
+                )
             messages.success(request, 'Invitation declined.')
             return redirect('assignment_detail', group.assignment_id)
         elif 'add_member' in request.POST or (
@@ -1810,6 +1975,17 @@ def group_detail(request, pk):
                         group = Group.objects.select_for_update().get(pk=group.pk)
                         membership_form.group = group
                         membership = membership_form.save()
+                        _record_group_membership_event(
+                            request.user,
+                            membership,
+                            GroupMembershipEvent.ACTION_ADDED,
+                        )
+                        if membership.status == GroupMembership.STATUS_APPROVED:
+                            _record_group_membership_event(
+                                request.user,
+                                membership,
+                                GroupMembershipEvent.ACTION_APPROVED,
+                            )
                         if not group.leader_id and membership.status == GroupMembership.STATUS_APPROVED:
                             group.leader = membership.student
                             group.save()
@@ -2713,7 +2889,7 @@ class AssignmentViewSet(viewsets.ModelViewSet):
 
 class GroupViewSet(viewsets.ModelViewSet):
     serializer_class = GroupSerializer
-    permission_classes = [ScopedRolePermission]
+    permission_classes = [GroupManagementPermission]
 
     def get_queryset(self):
         user = self.request.user
@@ -2726,14 +2902,46 @@ class GroupViewSet(viewsets.ModelViewSet):
             ).distinct()
         else:
             groups = Group.objects.filter(
-                memberships__student=user,
-                memberships__status=GroupMembership.STATUS_APPROVED,
-                status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
+                Q(
+                    memberships__student=user,
+                    memberships__status=GroupMembership.STATUS_APPROVED,
+                    status__in=(Group.STATUS_ACTIVE, Group.STATUS_CLOSED),
+                )
+                | Q(
+                    assignment__assignment_type=Assignment.TYPE_GROUP,
+                    assignment__representative_appointments__student=user,
+                    assignment__representative_appointments__status='active',
+                    assignment__course__enrolments__student=user,
+                )
             ).distinct()
         return groups.select_related('assignment__course').prefetch_related(
             'memberships__student',
             'tasks',
         )
+
+    def perform_create(self, serializer):
+        try:
+            group = serializer.save()
+        except ValidationError as error:
+            if hasattr(error, 'message_dict'):
+                raise APIValidationError(error.message_dict) from error
+            raise APIValidationError(error.messages) from error
+        log_audit(self.request.user, f'Created group {group.name}')
+        record_activity(
+            self.request.user,
+            'group_created',
+            f'Created group {group.name}',
+            assignment=group.assignment,
+            group=group,
+        )
+        for membership in group.memberships.select_related('student'):
+            notify(
+                membership.student,
+                f'You were allocated to {group.name} for {group.assignment.title}.',
+                Notification.TYPE_MEMBERSHIP,
+                assignment=group.assignment,
+                group=group,
+            )
 
 
 class TaskViewSet(viewsets.ModelViewSet):

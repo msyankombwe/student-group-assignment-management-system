@@ -153,32 +153,76 @@ class AssignmentForm(forms.ModelForm):
 
 
 class GroupForm(forms.ModelForm):
+    students = forms.ModelMultipleChoiceField(
+        queryset=User.objects.none(),
+        required=False,
+        widget=forms.MultipleHiddenInput,
+        label='Students to allocate',
+    )
+
     class Meta:
         model = Group
         fields = ('assignment', 'name', 'description', 'max_members')
 
-    def __init__(self, *args, lecturer=None, **kwargs):
+    def __init__(self, *args, lecturer=None, actor=None, **kwargs):
         super().__init__(*args, **kwargs)
-        assignments = Assignment.objects.select_related('course')
-        if lecturer and not lecturer.is_admin_role() and not lecturer.is_superuser:
-            assignments = assignments.filter(
-                Q(course__lecturer=lecturer) | Q(course__lecturer_links__lecturer=lecturer)
-            ).distinct()
-        assignments = assignments.filter(
-            status=Assignment.STATUS_PUBLISHED,
-            published_at__lte=timezone.now(),
+        self.actor = actor or lecturer
+        assignments = Assignment.objects.select_related('course').filter(
+            assignment_type=Assignment.TYPE_GROUP,
+            status__in=(Assignment.STATUS_DRAFT, Assignment.STATUS_PUBLISHED),
             course__is_active=True,
         )
+        if self.actor and (
+            self.actor.is_admin_role() or self.actor.is_superuser
+        ):
+            pass
+        elif self.actor and self.actor.is_lecturer():
+            assignments = assignments.filter(
+                Q(course__lecturer=self.actor)
+                | Q(course__lecturer_links__lecturer=self.actor)
+            )
+        elif self.actor and self.actor.is_student():
+            assignments = assignments.filter(
+                representative_appointments__student=self.actor,
+                representative_appointments__status='active',
+                course__enrolments__student=self.actor,
+            ).distinct()
+        else:
+            assignments = assignments.none()
         self.fields['assignment'].queryset = assignments
+        assignment_id = (
+            self.data.get('assignment')
+            if self.is_bound
+            else getattr(self.initial.get('assignment'), 'pk', self.initial.get('assignment'))
+        )
+        assignment = assignments.filter(pk=assignment_id).first()
+        if assignment:
+            allocated_students = GroupMembership.objects.filter(
+                assignment=assignment,
+            ).exclude(
+                status=GroupMembership.STATUS_REJECTED,
+            ).values('student_id')
+            self.fields['students'].queryset = User.objects.filter(
+                role=User.ROLE_STUDENT,
+                is_active=True,
+                course_enrolments__course=assignment.course,
+            ).exclude(
+                pk__in=allocated_students,
+            ).order_by('last_name', 'first_name', 'username').distinct()
         self.fields['max_members'].required = False
         self.fields['max_members'].help_text = (
             'Leave blank to use the assignment maximum.'
         )
+        self.fields['assignment'].widget.attrs.setdefault('class', 'form-select')
+        self.fields['name'].widget.attrs.setdefault('class', 'form-control')
+        self.fields['description'].widget.attrs.setdefault('class', 'form-control')
+        self.fields['max_members'].widget.attrs.setdefault('class', 'form-control')
 
     def clean(self):
         cleaned_data = super().clean()
         assignment = cleaned_data.get('assignment')
         max_members = cleaned_data.get('max_members')
+        students = cleaned_data.get('students', [])
         if assignment and max_members is not None and not (
             assignment.min_group_size <= max_members <= assignment.max_group_size
         ):
@@ -186,6 +230,27 @@ class GroupForm(forms.ModelForm):
                 'max_members',
                 f'Choose a capacity from {assignment.min_group_size} to {assignment.max_group_size}.',
             )
+        if assignment:
+            capacity = (
+                assignment.max_group_size
+                if max_members is None
+                else max_members
+            )
+            if len(students) > capacity:
+                self.add_error(
+                    'students',
+                    'The selected students exceed the maximum group capacity.',
+                )
+        if assignment and students:
+            existing = GroupMembership.objects.filter(
+                assignment=assignment,
+                student__in=students,
+            ).exclude(status=GroupMembership.STATUS_REJECTED)
+            if existing.exists():
+                self.add_error(
+                    'students',
+                    'A selected student already has a group or request for this assignment.',
+                )
         return cleaned_data
 
 

@@ -1,0 +1,214 @@
+{% extends "core/base.html" %}
+{% block title %}{{ title }} · UNILUS SGAMS{% endblock %}
+{% block content %}
+<section class="card shadow-sm">
+    <div class="card-body">
+        <h1 class="h4">{{ title }}</h1>
+        <p class="text-secondary">Create a group for a group assignment and allocate registered students now. Allocations made here are approved immediately.</p>
+        <form method="post" id="group-create-form" data-students-url-template="{% url 'assignment_group_students' 0 %}">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+                <div class="alert alert-danger" role="alert">{{ form.non_field_errors }}</div>
+            {% endif %}
+            {% for field in form %}
+                {% if field.name != 'students' %}
+                    <div class="mb-3">
+                        {{ field.label_tag }}
+                        {{ field }}
+                        {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                        {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                    </div>
+                {% endif %}
+            {% endfor %}
+
+            <section class="border rounded p-3 mb-3" aria-labelledby="student-selection-title">
+                <h2 class="h5" id="student-selection-title">Allocate students</h2>
+                <p class="small text-secondary">Only active students registered for the selected assignment course and not already allocated to another group are listed.</p>
+                <label class="form-label" for="student-search">Search by Student ID or name</label>
+                <input class="form-control mb-3" id="student-search" type="search" autocomplete="off" placeholder="Search Student ID or full name">
+                <div id="student-list-status" class="small text-secondary mb-2" aria-live="polite"></div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th scope="col">Select</th>
+                                <th scope="col">Student ID</th>
+                                <th scope="col">Full name</th>
+                                <th scope="col">Programme</th>
+                                <th scope="col">Course registration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="eligible-students">
+                            {% for student in eligible_students %}
+                                <tr data-student-row>
+                                    <td><input class="form-check-input" type="checkbox" name="students" value="{{ student.pk }}" aria-label="Allocate {{ student.get_full_name|default:student.username }}" {% if student.pk|stringformat:"s" in selected_student_ids %}checked{% endif %}></td>
+                                    <td>{{ student.student_number|default:"Student ID Not Provided" }}</td>
+                                    <td>{{ student.get_full_name|default:student.username }}</td>
+                                    <td>{{ student.programme|default:"Programme not provided" }}</td>
+                                    <td>Registered</td>
+                                </tr>
+                            {% empty %}
+                                <tr data-empty-row><td colspan="5" class="text-secondary">Choose an assignment to load eligible students.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% for error in form.students.errors %}<div class="text-danger small mb-2">{{ error }}</div>{% endfor %}
+                <p class="mb-1"><strong>Selected:</strong> <span id="selected-count">0</span></p>
+                <ul class="small mb-2" id="selected-students" aria-live="polite"></ul>
+                <p class="mb-0"><strong>Remaining group capacity:</strong> <span id="remaining-capacity">—</span></p>
+            </section>
+            <button class="btn btn-primary" type="submit">Create group</button>
+            <a class="btn btn-link" href="{% url 'dashboard' %}">Cancel</a>
+        </form>
+    </div>
+</section>
+{{ selected_student_ids|json_script:"selected-student-ids" }}
+<script>
+(() => {
+    const form = document.getElementById('group-create-form');
+    const assignment = document.getElementById('id_assignment');
+    const capacity = document.getElementById('id_max_members');
+    const search = document.getElementById('student-search');
+    const tableBody = document.getElementById('eligible-students');
+    const status = document.getElementById('student-list-status');
+    const selectedCount = document.getElementById('selected-count');
+    const selectedStudents = document.getElementById('selected-students');
+    const remainingCapacity = document.getElementById('remaining-capacity');
+    const initialSelected = new Set(
+        JSON.parse(document.getElementById('selected-student-ids').textContent),
+    );
+    let assignmentCapacity = null;
+
+    function updateSummary() {
+        const selected = [...tableBody.querySelectorAll('input[name="students"]:checked')];
+        const groupCapacity = capacity.value
+            ? Number(capacity.value)
+            : assignmentCapacity;
+        selectedCount.textContent = String(selected.length);
+        selectedStudents.replaceChildren();
+        for (const checkbox of selected) {
+            const cells = checkbox.closest('tr').cells;
+            const item = document.createElement('li');
+            item.textContent = `${cells[1].textContent} — ${cells[2].textContent}`;
+            selectedStudents.append(item);
+        }
+        remainingCapacity.textContent = groupCapacity === null
+            ? '—'
+            : String(Math.max(groupCapacity - selected.length, 0));
+    }
+
+    function renderStudents(students) {
+        tableBody.replaceChildren();
+        if (!students.length) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 5;
+            cell.className = 'text-secondary';
+            cell.textContent = 'No eligible students are available for this assignment.';
+            row.append(cell);
+            tableBody.append(row);
+            updateSummary();
+            return;
+        }
+        for (const student of students) {
+            const row = document.createElement('tr');
+            row.dataset.studentRow = '';
+            row.dataset.searchText = `${student.student_id} ${student.full_name}`.toLocaleLowerCase();
+            const selectCell = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.className = 'form-check-input';
+            checkbox.type = 'checkbox';
+            checkbox.name = 'students';
+            checkbox.value = String(student.id);
+            checkbox.setAttribute('aria-label', `Allocate ${student.full_name}`);
+            checkbox.checked = initialSelected.has(String(student.id));
+            selectCell.append(checkbox);
+            const values = [
+                student.student_id || 'Student ID Not Provided',
+                student.full_name,
+                student.programme || 'Programme not provided',
+                student.registration_status,
+            ];
+            row.append(selectCell);
+            for (const value of values) {
+                const cell = document.createElement('td');
+                cell.textContent = value;
+                row.append(cell);
+            }
+            tableBody.append(row);
+        }
+        initialSelected.clear();
+        updateSummary();
+        filterStudents();
+    }
+
+    function filterStudents() {
+        const query = search.value.trim().toLocaleLowerCase();
+        let visible = 0;
+        for (const row of tableBody.querySelectorAll('[data-student-row]')) {
+            const text = row.dataset.searchText || row.textContent.toLocaleLowerCase();
+            row.hidden = !text.includes(query);
+            if (!row.hidden) visible += 1;
+        }
+        status.textContent = query && visible === 0 ? 'No students match this search.' : '';
+    }
+
+    async function loadStudents() {
+        const assignmentId = assignment.value;
+        assignmentCapacity = null;
+        if (!assignmentId) {
+            renderStudents([]);
+            status.textContent = 'Choose an assignment to load eligible students.';
+            return;
+        }
+        renderStudents([]);
+        status.textContent = 'Loading eligible students…';
+        const url = form.dataset.studentsUrlTemplate.replace(
+            '/0/group-students/',
+            `/${assignmentId}/group-students/`,
+        );
+        try {
+            const response = await fetch(url, {
+                headers: {'Accept': 'application/json'},
+                credentials: 'same-origin',
+            });
+            if (!response.ok) {
+                throw new Error('Eligible students could not be loaded.');
+            }
+            const data = await response.json();
+            assignmentCapacity = data.assignment_max_group_size;
+            capacity.min = data.assignment_min_group_size;
+            capacity.max = data.assignment_max_group_size;
+            if (
+                capacity.value
+                && (
+                    Number(capacity.value) < data.assignment_min_group_size
+                    || Number(capacity.value) > data.assignment_max_group_size
+                )
+            ) {
+                capacity.value = '';
+            }
+            renderStudents(data.students);
+            status.textContent = `${data.students.length} eligible student${data.students.length === 1 ? '' : 's'} available.`;
+        } catch (error) {
+            renderStudents([]);
+            status.textContent = error.message;
+        }
+    }
+
+    assignment.addEventListener('change', () => {
+        initialSelected.clear();
+        loadStudents();
+    });
+    capacity.addEventListener('input', updateSummary);
+    search.addEventListener('input', filterStudents);
+    tableBody.addEventListener('change', updateSummary);
+    if (assignment.value) {
+        loadStudents();
+    } else {
+        updateSummary();
+    }
+})();
+</script>
+{% endblock %}

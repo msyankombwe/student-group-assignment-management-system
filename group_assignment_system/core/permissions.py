@@ -2,7 +2,12 @@ from django.contrib.auth.backends import BaseBackend
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 from .models import Assignment, Course, Group, Task, TaskUpdate, User
-from .services import user_is_group_member, user_manages_assignment, user_manages_course
+from .services import (
+    user_can_manage_assignment_groups,
+    user_is_group_member,
+    user_manages_assignment,
+    user_manages_course,
+)
 
 
 def is_system_administrator(user):
@@ -42,6 +47,34 @@ class ScopedRolePermission(BasePermission):
         if isinstance(obj, TaskUpdate):
             return user_manages_assignment(request.user, obj.task.group.assignment)
         return False
+
+
+class GroupManagementPermission(ScopedRolePermission):
+    def has_permission(self, request, view):
+        if super().has_permission(request, view):
+            return True
+        user = request.user
+        if (
+            request.method != 'POST'
+            or getattr(view, 'action', None) != 'create'
+            or not user
+            or not user.is_authenticated
+            or not user.is_active
+            or not user.is_student()
+        ):
+            return False
+        assignment_id = request.data.get('assignment')
+        if not assignment_id:
+            return False
+        try:
+            assignment_id = int(assignment_id)
+        except (TypeError, ValueError):
+            return False
+        assignment = Assignment.objects.filter(pk=assignment_id).first()
+        return bool(
+            assignment
+            and user_can_manage_assignment_groups(user, assignment)
+        )
 
 
 class TaskManagementPermission(BasePermission):

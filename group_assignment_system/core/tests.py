@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import importlib
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from django.conf import settings
@@ -419,6 +420,7 @@ class GroupAssignmentWorkflowTests(TestCase):
             {member['username'] for member in response.data[0]['members']},
             {'student', 'peer'},
         )
+        self.assertNotIn('student_number', response.data[0]['members'][0])
 
         response = self.client.get(reverse('api-groups-detail', args=[self.private_group.pk]))
         self.assertEqual(response.status_code, 404)
@@ -432,6 +434,14 @@ class GroupAssignmentWorkflowTests(TestCase):
             'name': 'Unauthorized group',
         })
         self.assertEqual(response.status_code, 403)
+        self.login(self.lecturer)
+        lecturer_groups = self.client.get(reverse('api-groups-list'))
+        self.assertEqual(lecturer_groups.status_code, 200)
+        self.assertIn(
+            'student_number',
+            lecturer_groups.data[0]['members'][0],
+        )
+        self.login(self.student)
         task = Task.objects.create(
             group=self.group,
             title='Team planning',
@@ -1379,6 +1389,18 @@ class GroupAssignmentWorkflowTests(TestCase):
                 status=GroupMembership.STATUS_APPROVED,
             ).exists()
         )
+        self.assertEqual(
+            set(
+                GroupMembershipEvent.objects.filter(
+                    group=self.group,
+                    student=self.unassigned_student,
+                ).values_list('action', flat=True)
+            ),
+            {
+                GroupMembershipEvent.ACTION_ADDED,
+                GroupMembershipEvent.ACTION_APPROVED,
+            },
+        )
         self.assertTrue(Notification.objects.filter(user=self.unassigned_student).exists())
 
     def test_student_proposes_group_invites_classmate_and_lecturer_approves(self):
@@ -1414,6 +1436,18 @@ class GroupAssignmentWorkflowTests(TestCase):
                 status=GroupMembership.STATUS_INVITED,
             ).exists()
         )
+        self.assertEqual(
+            set(
+                GroupMembershipEvent.objects.filter(group=group).values_list(
+                    'action',
+                    flat=True,
+                )
+            ),
+            {
+                GroupMembershipEvent.ACTION_ADDED,
+                GroupMembershipEvent.ACTION_INVITED,
+            },
+        )
 
         self.login(self.invited_student)
         response = self.client.post(reverse('group_detail', args=[group.pk]), {
@@ -1434,6 +1468,13 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(group.leader, self.unassigned_student)
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, GroupMembership.STATUS_APPROVED)
+        self.assertEqual(
+            GroupMembershipEvent.objects.filter(
+                group=group,
+                action=GroupMembershipEvent.ACTION_APPROVED,
+            ).count(),
+            2,
+        )
 
         self.login(self.invited_student)
         response = self.client.get(reverse('group_detail', args=[group.pk]))
@@ -1457,6 +1498,15 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(membership.group, self.group)
         self.assertEqual(membership.status, GroupMembership.STATUS_PENDING)
         self.assertEqual(
+            list(
+                GroupMembershipEvent.objects.filter(
+                    group=self.group,
+                    student=self.unassigned_student,
+                ).values_list('action', flat=True)
+            ),
+            [GroupMembershipEvent.ACTION_ADDED],
+        )
+        self.assertEqual(
             self.client.get(reverse('group_detail', args=[self.group.pk])).status_code,
             403,
         )
@@ -1472,6 +1522,18 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(membership.status, GroupMembership.STATUS_APPROVED)
         self.assertEqual(self.group.leader, self.unassigned_student)
         self.assertEqual(self.group.member_count(), 3)
+        self.assertEqual(
+            set(
+                GroupMembershipEvent.objects.filter(
+                    group=self.group,
+                    student=self.unassigned_student,
+                ).values_list('action', flat=True)
+            ),
+            {
+                GroupMembershipEvent.ACTION_ADDED,
+                GroupMembershipEvent.ACTION_APPROVED,
+            },
+        )
 
     def test_student_can_reapply_to_group_after_request_is_rejected(self):
         membership = GroupMembership.objects.create(
@@ -1532,6 +1594,341 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(group.capacity, 4)
         self.assertEqual(group.formation_type, Group.FORMATION_LECTURER)
         self.assertEqual(group.status, Group.STATUS_ACTIVE)
+
+    def test_group_creation_allocates_eligible_students_and_records_audit_events(self):
+        self.unassigned_student.student_profile.student_number = 'UNILUS-NEW-01'
+        self.unassigned_student.student_profile.programme = 'BIT'
+        self.unassigned_student.student_profile.save()
+        self.invited_student.student_profile.programme = 'BIT'
+        self.invited_student.student_profile.save()
+        self.login(self.lecturer)
+        url = reverse('assignment_group_create', args=[self.assignment.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Student ID Not Provided')
+        self.assertContains(response, 'UNILUS-NEW-01')
+        self.assertContains(response, 'Registered')
+
+        response = self.client.post(url, {
+            'assignment': self.assignment.pk,
+            'name': 'Initial Allocation',
+            'description': 'Allocated on creation.',
+            'max_members': 4,
+            'students': [self.unassigned_student.pk, self.invited_student.pk],
+        })
+        group = Group.objects.get(name='Initial Allocation')
+        self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+        self.assertEqual(
+            set(group.memberships.values_list('student_id', flat=True)),
+            {self.unassigned_student.pk, self.invited_student.pk},
+        )
+        self.assertEqual(group.member_count(), 2)
+        self.assertIsNone(group.leader)
+        self.assertEqual(
+            set(group.memberships.values_list('status', flat=True)),
+            {GroupMembership.STATUS_APPROVED},
+        )
+        self.assertEqual(
+            set(
+                GroupMembershipEvent.objects.filter(group=group).values_list(
+                    'action',
+                    flat=True,
+                )
+            ),
+            {
+                GroupMembershipEvent.ACTION_ADDED,
+                GroupMembershipEvent.ACTION_APPROVED,
+            },
+        )
+        self.assertEqual(GroupMembershipEvent.objects.filter(group=group).count(), 4)
+
+    def test_administrator_can_create_groups_for_draft_assignments(self):
+        draft = Assignment.objects.create(
+            course=self.course,
+            title='Draft group work',
+            description='Not published yet.',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        self.login(self.administrator)
+        response = self.client.get(reverse('group_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Draft group work')
+        response = self.client.post(reverse('group_create'), {
+            'assignment': draft.pk,
+            'name': 'Draft Allocation',
+            'description': 'Groups before publication.',
+            'max_members': 4,
+            'students': [self.unassigned_student.pk],
+        })
+        group = Group.objects.get(name='Draft Allocation')
+        self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+        self.assertEqual(group.assignment, draft)
+        self.assertTrue(
+            GroupMembership.objects.filter(
+                group=group,
+                student=self.unassigned_student,
+                status=GroupMembership.STATUS_APPROVED,
+            ).exists()
+        )
+
+    def test_lecturer_can_create_groups_for_draft_and_scheduled_assignments(self):
+        draft = Assignment.objects.create(
+            course=self.course,
+            title='Lecturer draft',
+            description='Not published.',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        scheduled = Assignment.objects.create(
+            course=self.course,
+            title='Lecturer scheduled',
+            description='Future publication.',
+            deadline=timezone.now() + timedelta(days=20),
+            status=Assignment.STATUS_PUBLISHED,
+            published_at=timezone.now() + timedelta(days=3),
+        )
+        self.login(self.lecturer)
+        response = self.client.get(reverse('group_create'))
+        self.assertContains(response, 'Lecturer draft')
+        self.assertContains(response, 'Lecturer scheduled')
+        for assignment, name in (
+            (draft, 'Lecturer Draft Group'),
+            (scheduled, 'Lecturer Scheduled Group'),
+        ):
+            response = self.client.post(reverse('group_create'), {
+                'assignment': assignment.pk,
+                'name': name,
+                'description': 'Created before publication.',
+                'max_members': 4,
+                'students': [],
+            })
+            group = Group.objects.get(name=name)
+            self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+            self.assertEqual(group.assignment, assignment)
+            self.assertEqual(group.created_by, self.lecturer)
+
+    def test_representative_can_create_only_for_appointed_enrolled_assignment(self):
+        draft = Assignment.objects.create(
+            course=self.course,
+            title='Representative draft',
+            description='SECRET_DRAFT_INSTRUCTIONS_57291',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        appoint_assignment_class_representative(
+            self.lecturer,
+            draft,
+            self.unassigned_student,
+        )
+        self.login(self.unassigned_student)
+        dashboard_response = self.client.get(reverse('dashboard'))
+        self.assertContains(dashboard_response, 'Representative draft')
+        self.assertContains(dashboard_response, 'Manage groups')
+        detail_response = self.client.get(
+            reverse('assignment_detail', args=[draft.pk])
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertNotContains(detail_response, 'SECRET_DRAFT_INSTRUCTIONS_57291')
+        self.assertEqual(
+            self.client.get(reverse('assignment_edit', args=[draft.pk])).status_code,
+            403,
+        )
+        url = reverse('assignment_group_create', args=[draft.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(url, {
+            'assignment': draft.pk,
+            'name': 'Representative Allocation',
+            'description': 'Created by the appointed representative.',
+            'max_members': 4,
+            'students': [self.invited_student.pk],
+        })
+        group = Group.objects.get(name='Representative Allocation')
+        self.assertRedirects(
+            response,
+            reverse('assignment_detail', args=[draft.pk]),
+        )
+        self.assertEqual(group.created_by, self.unassigned_student)
+        self.assertTrue(
+            GroupMembership.objects.filter(
+                group=group,
+                student=self.invited_student,
+                status=GroupMembership.STATUS_APPROVED,
+            ).exists()
+        )
+
+        other_assignment = Assignment.objects.create(
+            course=self.course,
+            title='Not appointed',
+            description='Out of representative scope.',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse('assignment_group_create', args=[other_assignment.pk])
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse('assignment_group_students', args=[other_assignment.pk])
+            ).status_code,
+            403,
+        )
+        response = self.client.post(reverse('api-groups-list'), {
+            'assignment': other_assignment.pk,
+            'name': 'Out of scope API group',
+            'max_members': 4,
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Group.objects.filter(name='Out of scope API group').exists())
+        CourseEnrolment.objects.filter(
+            course=self.course,
+            student=self.unassigned_student,
+        ).delete()
+        self.assertEqual(
+            self.client.get(url).status_code,
+            403,
+        )
+
+    def test_group_creation_rejects_non_enrolled_students_and_students_already_allocated(self):
+        CourseEnrolment.objects.create(
+            course=self.other_course,
+            student=self.outsider,
+        )
+        self.login(self.lecturer)
+        url = reverse('assignment_group_create', args=[self.assignment.pk])
+        response = self.client.get(
+            reverse('assignment_group_students', args=[self.assignment.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        eligible_ids = {row['id'] for row in response.json()['students']}
+        self.assertNotIn(self.outsider.pk, eligible_ids)
+        self.assertNotIn(self.student.pk, eligible_ids)
+        self.assertNotIn(self.peer.pk, eligible_ids)
+
+        response = self.client.post(url, {
+            'assignment': self.assignment.pk,
+            'name': 'Ineligible Allocation',
+            'description': '',
+            'max_members': 4,
+            'students': [self.outsider.pk],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Group.objects.filter(name='Ineligible Allocation').exists())
+        response = self.client.post(reverse('api-groups-list'), {
+            'assignment': self.assignment.pk,
+            'name': 'API Ineligible Allocation',
+            'max_members': 4,
+            'initial_students': [self.outsider.pk],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Group.objects.filter(name='API Ineligible Allocation').exists())
+
+        response = self.client.post(url, {
+            'assignment': self.assignment.pk,
+            'name': 'Duplicate Allocation',
+            'description': '',
+            'max_members': 4,
+            'students': [self.student.pk],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Group.objects.filter(name='Duplicate Allocation').exists())
+
+    def test_group_creation_enforces_capacity_and_rolls_back_on_audit_failure(self):
+        extra_student = User.objects.create_user(
+            username='capacity-student',
+            password='test-password',
+            role=User.ROLE_STUDENT,
+        )
+        CourseEnrolment.objects.create(course=self.course, student=extra_student)
+        url = reverse('assignment_group_create', args=[self.assignment.pk])
+        self.login(self.lecturer)
+        response = self.client.post(url, {
+            'assignment': self.assignment.pk,
+            'name': 'Over Capacity',
+            'description': '',
+            'max_members': 2,
+            'students': [
+                self.unassigned_student.pk,
+                self.invited_student.pk,
+                extra_student.pk,
+            ],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Group.objects.filter(name='Over Capacity').exists())
+
+        with patch.object(
+            GroupMembershipEvent,
+            'save',
+            side_effect=ValidationError('Audit event failure.'),
+        ):
+            response = self.client.post(url, {
+                'assignment': self.assignment.pk,
+                'name': 'Rolled Back Allocation',
+                'description': '',
+                'max_members': 4,
+                'students': [self.unassigned_student.pk],
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Group.objects.filter(name='Rolled Back Allocation').exists())
+        self.assertFalse(
+            GroupMembership.objects.filter(
+                assignment=self.assignment,
+                student=self.unassigned_student,
+            ).exists()
+        )
+
+    def test_representative_api_group_creation_is_scoped_and_student_api_creation_is_denied(self):
+        draft = Assignment.objects.create(
+            course=self.course,
+            title='API representative assignment',
+            description='Group assignment.',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        appoint_assignment_class_representative(
+            self.lecturer,
+            draft,
+            self.unassigned_student,
+        )
+        self.login(self.unassigned_student)
+        response = self.client.post(reverse('api-groups-list'), {
+            'assignment': draft.pk,
+            'name': 'API Representative Group',
+            'description': 'Created through the scoped API.',
+            'max_members': 4,
+            'initial_students': [self.invited_student.pk],
+        })
+        self.assertEqual(response.status_code, 201)
+        group = Group.objects.get(name='API Representative Group')
+        self.assertTrue(
+            GroupMembership.objects.filter(
+                group=group,
+                student=self.invited_student,
+                status=GroupMembership.STATUS_APPROVED,
+            ).exists()
+        )
+
+        self.login(self.student)
+        self.assertEqual(self.client.get(reverse('group_create')).status_code, 403)
+        self.assertEqual(self.client.get(
+            reverse('assignment_group_create', args=[draft.pk])
+        ).status_code, 403)
+        response = self.client.post(reverse('group_create'), {
+            'assignment': draft.pk,
+            'name': 'Unauthorized web group',
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Group.objects.filter(name='Unauthorized web group').exists())
+        response = self.client.post(reverse('api-groups-list'), {
+            'assignment': draft.pk,
+            'name': 'Unauthorized API Group',
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Group.objects.filter(name='Unauthorized API Group').exists())
 
     def test_assignment_type_defaults_to_group_and_representative_is_assignment_scoped(self):
         self.assertEqual(self.assignment.assignment_type, Assignment.TYPE_GROUP)

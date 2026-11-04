@@ -67,6 +67,11 @@ urlpatterns = [
         views.assignment_group_create,
         name='assignment_group_create',
     ),
+    path(
+        'assignments/<int:assignment_id>/group-students/',
+        views.assignment_group_students,
+        name='assignment_group_students',
+    ),
     path('groups/new/', views.group_create, name='group_create'),
     path('groups/<int:pk>/', views.group_detail, name='group_detail'),
     path(
