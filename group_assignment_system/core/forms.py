@@ -364,6 +364,8 @@ class MembershipForm(forms.ModelForm):
     def __init__(self, *args, group=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['student'].queryset = User.objects.filter(role=User.ROLE_STUDENT, is_active=True)
+        self.fields['student'].label_from_instance = self.student_label
+        self.fields['student'].widget.attrs.setdefault('class', 'form-select')
         self.group = group
         if group:
             self.fields['student'].queryset = self.fields['student'].queryset.filter(
@@ -372,6 +374,13 @@ class MembershipForm(forms.ModelForm):
                 Q(group_memberships__assignment=group.assignment)
                 & ~Q(group_memberships__status=GroupMembership.STATUS_REJECTED)
             ).distinct()
+
+    @staticmethod
+    def student_label(student):
+        student_id = student.student_number or 'Student ID Not Provided'
+        full_name = student.get_full_name() or student.username
+        programme = student.programme or 'Programme not provided'
+        return f'{student_id} — {full_name} — {programme} — Registered'
 
     def clean_student(self):
         student = self.cleaned_data['student']
@@ -393,9 +402,19 @@ class MembershipForm(forms.ModelForm):
             existing = GroupMembership.objects.filter(
                 assignment=self.group.assignment,
                 student=membership.student,
-            ).exclude(status=GroupMembership.STATUS_REJECTED).first()
-            if existing and existing.pk != membership.pk:
+            ).first()
+            if existing and existing.status != GroupMembership.STATUS_REJECTED:
                 raise ValidationError('This student already has a group request for the assignment.')
+            if existing:
+                membership = existing
+                membership.group = self.group
+                membership.invited_by = None
+            membership.assignment = self.group.assignment
+            membership.status = (
+                GroupMembership.STATUS_PENDING
+                if self.group.status == Group.STATUS_PENDING
+                else GroupMembership.STATUS_APPROVED
+            )
             membership.save()
         return membership
 

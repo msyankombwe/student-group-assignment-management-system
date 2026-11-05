@@ -54,6 +54,12 @@
         <a class="nav-link" href="#members">Members</a>
         <a class="nav-link" href="#activity-history">Activity History</a>
     </nav>
+{% elif can_view_membership %}
+    <nav class="nav nav-pills flex-wrap gap-2 mb-3" aria-label="Group management sections">
+        <a class="nav-link" href="#overview">Overview</a>
+        <a class="nav-link" href="#members">Members</a>
+        <a class="nav-link" href="#membership-history">Membership history</a>
+    </nav>
 {% endif %}
 
 {% if can_manage_group %}
@@ -82,6 +88,15 @@
                 {% endfor %}
                 <div class="col-12"><button class="btn btn-primary" type="submit" name="update_group" value="1">Save group details</button></div>
             </form>
+            {% if can_manage and group.status == 'active' %}
+                <hr>
+                <h3 class="h6">Dissolve group</h3>
+                <p class="small text-secondary">This archives the group and releases its memberships. Submissions, grades, files, tasks, and history remain attached to the archived group.</p>
+                <form method="post" onsubmit="return confirm('Dissolve this group and release its members? Historical records will be retained.');">
+                    {% csrf_token %}
+                    <button class="btn btn-outline-danger" type="submit" name="dissolve_group" value="1">Dissolve group</button>
+                </form>
+            {% endif %}
         </div>
     </section>
 {% endif %}
@@ -100,24 +115,51 @@
     <div class="col-md-4">
         <section id="members" class="card shadow-sm h-100">
             <div class="card-body">
-                {% if can_view_private %}<h2 class="h5">Approved members</h2>{% endif %}
-                <ul class="list-group list-group-flush mb-3">
-                    {% if can_view_private %}
+                {% if can_view_membership %}
+                    <h2 class="h5">Group members</h2>
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm align-middle">
+                            <thead><tr><th scope="col">Student ID</th><th scope="col">Full Name</th><th scope="col">Programme</th><th scope="col">Registration Status</th><th scope="col">Membership Status</th><th scope="col">Action</th></tr></thead>
+                            <tbody>
                         {% for membership in member_rows %}
-                            <li class="list-group-item px-0 d-flex justify-content-between align-items-center gap-2">
-                                <span>{{ membership.student.get_full_name|default:membership.student.username }}
-                                    {% if group.leader_id == membership.student_id %}<span class="badge text-bg-primary">Leader</span>{% endif %}
-                                </span>
-                                {% if can_manage_group %}
-                                    <form method="post">{% csrf_token %}
-                                        <input type="hidden" name="membership_id" value="{{ membership.pk }}">
-                                        <button class="btn btn-sm btn-outline-danger" name="remove_member" value="1">Remove</button>
-                                    </form>
-                                {% endif %}
-                            </li>
-                        {% empty %}<li class="list-group-item px-0 text-secondary">No approved members.</li>{% endfor %}
-                    {% endif %}
-                </ul>
+                            <tr>
+                                <td>{{ membership.student.student_number|default:"Student ID Not Provided" }}</td>
+                                <td>{{ membership.student.get_full_name|default:membership.student.username }}{% if group.leader_id == membership.student_id %} <span class="badge text-bg-primary">Leader</span>{% endif %}</td>
+                                <td>{{ membership.student.programme|default:"Programme not provided" }}</td>
+                                <td>{% if membership.is_course_registered %}Registered{% else %}Not registered{% endif %}</td>
+                                <td>{{ membership.get_status_display }}</td>
+                                <td>
+                                    {% if can_manage_memberships and membership.status == 'approved' %}
+                                        <div class="d-flex flex-column gap-1">
+                                            <form method="post" onsubmit="return confirm('Remove this student from the group? Existing submissions and history will be retained.');">{% csrf_token %}
+                                                <input type="hidden" name="membership_id" value="{{ membership.pk }}">
+                                                <button class="btn btn-sm btn-outline-danger" name="remove_member" value="1">Remove</button>
+                                            </form>
+                                            {% if transfer_destinations %}
+                                                <form method="post" class="d-flex flex-column gap-1" onsubmit="return confirm('Transfer this student to the selected group?');">
+                                                    {% csrf_token %}
+                                                    <input type="hidden" name="membership_id" value="{{ membership.pk }}">
+                                                    <label class="visually-hidden" for="destination-{{ membership.pk }}">Transfer member to group</label>
+                                                    <select class="form-select form-select-sm" id="destination-{{ membership.pk }}" name="destination_group" required>
+                                                        <option value="">Transfer to…</option>
+                                                        {% for destination in transfer_destinations %}
+                                                            <option value="{{ destination.pk }}">{{ destination.name }} ({{ destination.member_count }}/{{ destination.capacity }})</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                    <button class="btn btn-sm btn-outline-primary" name="transfer_member" value="1">Transfer</button>
+                                                </form>
+                                            {% endif %}
+                                        </div>
+                                    {% else %}—{% endif %}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="6" class="text-secondary">No current members or requests.</td></tr>
+                        {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
                 {% if can_manage_group and group.status == 'active' %}
                     <h3 class="h6">Pending join requests and invitations</h3>
                     <ul class="list-group mb-3">
@@ -146,7 +188,7 @@
                         <button class="btn btn-sm btn-outline-primary" type="submit" name="invite_students" value="1">Send invitations</button>
                     </form>
                 {% endif %}
-                {% if can_manage_group and group.status == 'active' %}
+                {% if can_manage_memberships and group.status == 'active' %}
                     <h3 class="h6">Add a student</h3>
                     <form method="post">
                         {% csrf_token %}
@@ -328,13 +370,55 @@
             <section class="card shadow-sm"><div class="card-body">
                 <h2 class="h5">Group space is private</h2>
                 <p class="mb-0 text-secondary">
-                    {% if group.status == 'pending' %}
+                    {% if can_manage_memberships %}
+                        Collaboration tools are reserved for approved group members and authorized lecturers. Membership management is available below.
+                    {% elif group.status == 'pending' %}
                         Group details and collaboration tools will be available after approval.
                     {% else %}
                         Your invitation or membership request is awaiting lecturer approval.
                     {% endif %}
                 </p>
             </div></section>
+        {% endif %}
+        {% if can_view_membership %}
+            <section id="membership-history" class="card shadow-sm mb-3">
+                <div class="card-body">
+                    <h2 class="h5">Assignment membership history</h2>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead><tr><th scope="col">Date and time</th><th scope="col">Action</th><th scope="col">Student</th><th scope="col">Student ID</th><th scope="col">Group</th><th scope="col">Previous group</th><th scope="col">Recorded by</th></tr></thead>
+                            <tbody>
+                                {% for event in membership_history %}
+                                    <tr>
+                                        <td><time datetime="{{ event.occurred_at|date:'c' }}">{{ event.occurred_at }}</time></td>
+                                        <td>{{ event.get_action_display }}</td>
+                                        <td>{{ event.student_full_name_snapshot|default:event.student_username_snapshot }}</td>
+                                        <td>{{ event.student_number_snapshot|default:"Student ID Not Provided" }}</td>
+                                        <td>{{ event.group_name_snapshot }}</td>
+                                        <td>{{ event.previous_group_name_snapshot|default:"—" }}</td>
+                                        <td>{{ event.actor_full_name_snapshot|default:event.actor_username_snapshot }}</td>
+                                    </tr>
+                                {% empty %}
+                                    <tr><td colspan="7" class="text-secondary">No membership changes have been recorded for this assignment.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if membership_history_page.has_other_pages %}
+                        <nav aria-label="Membership history pages">
+                            <ul class="pagination pagination-sm mb-0">
+                                {% if membership_history_page.has_previous %}
+                                    <li class="page-item"><a class="page-link" href="?membership_page={{ membership_history_page.previous_page_number }}#membership-history">Previous</a></li>
+                                {% endif %}
+                                <li class="page-item disabled"><span class="page-link">Page {{ membership_history_page.number }} of {{ membership_history_page.paginator.num_pages }}</span></li>
+                                {% if membership_history_page.has_next %}
+                                    <li class="page-item"><a class="page-link" href="?membership_page={{ membership_history_page.next_page_number }}#membership-history">Next</a></li>
+                                {% endif %}
+                            </ul>
+                        </nav>
+                    {% endif %}
+                </div>
+            </section>
         {% endif %}
     </div>
 </div>

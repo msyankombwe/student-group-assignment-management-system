@@ -190,10 +190,22 @@ class AssignmentAdmin(admin.ModelAdmin):
 class GroupAdmin(admin.ModelAdmin):
     list_display = ('name', 'assignment', 'status', 'created_at')
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(GroupMembership)
 class GroupMembershipAdmin(admin.ModelAdmin):
     list_display = ('group', 'student', 'status', 'joined_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(GroupMembershipEvent)

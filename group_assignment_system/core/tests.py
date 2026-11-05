@@ -29,6 +29,7 @@ from .models import (
     CourseEnrolment,
     ContributionActivity,
     FileDocument,
+    Grade,
     Group,
     GroupMembership,
     GroupMembershipEvent,
@@ -54,6 +55,7 @@ from .services import (
     user_can_access_group_content,
     user_is_assignment_representative,
     user_manages_assignment,
+    transfer_assignment_group_member,
 )
 
 
@@ -1930,6 +1932,379 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertFalse(Group.objects.filter(name='Unauthorized API Group').exists())
 
+    def test_representative_can_manage_memberships_and_view_assignment_history_only(self):
+        appointment_assignment = Assignment.objects.create(
+            course=self.course,
+            title='Representative membership assignment',
+            description='Membership controls only.',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        appoint_assignment_class_representative(
+            self.lecturer,
+            appointment_assignment,
+            self.unassigned_student,
+        )
+        group = Group.objects.create(
+            assignment=appointment_assignment,
+            name='Representative-managed group',
+        )
+        destination = Group.objects.create(
+            assignment=appointment_assignment,
+            name='Representative destination',
+        )
+        membership = GroupMembership.objects.create(
+            group=group,
+            student=self.student,
+        )
+        self.login(self.unassigned_student)
+        response = self.client.get(reverse('group_list'))
+        self.assertContains(response, group.name)
+        response = self.client.get(reverse('group_detail', args=[group.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Student ID Not Provided')
+        self.assertContains(response, 'Membership history')
+        self.assertNotContains(response, 'Assessment and lecturer feedback')
+
+        response = self.client.post(reverse('group_detail', args=[group.pk]), {
+            'student': self.invited_student.pk,
+            'add_member': '1',
+        })
+        self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+        self.assertTrue(
+            GroupMembership.objects.filter(
+                group=group,
+                student=self.invited_student,
+                status=GroupMembership.STATUS_APPROVED,
+            ).exists()
+        )
+
+        response = self.client.post(reverse('group_detail', args=[group.pk]), {
+            'membership_id': membership.pk,
+            'destination_group': destination.pk,
+            'transfer_member': '1',
+        })
+        self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+        membership.refresh_from_db()
+        self.assertEqual(membership.group, destination)
+        transfer_event = GroupMembershipEvent.objects.get(
+            action=GroupMembershipEvent.ACTION_TRANSFERRED,
+            student=self.student,
+        )
+        self.assertEqual(transfer_event.previous_group, group)
+        self.assertEqual(transfer_event.group, destination)
+        self.assertEqual(transfer_event.actor, self.unassigned_student)
+        self.assertIsNotNone(transfer_event.occurred_at)
+        history_response = self.client.get(reverse('group_detail', args=[group.pk]))
+        self.assertContains(history_response, 'Representative destination')
+
+        self.assertEqual(
+            self.client.post(reverse('group_detail', args=[group.pk]), {
+                'update_group': '1',
+                'name': 'Unauthorized rename',
+            }).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(reverse('group_detail', args=[group.pk]), {
+                'approve_member': '1',
+                'membership_id': GroupMembership.objects.get(
+                    group=group,
+                    student=self.invited_student,
+                ).pk,
+            }).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(reverse('group_detail', args=[group.pk]), {
+                'dissolve_group': '1',
+            }).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(reverse('group_detail', args=[group.pk]), {
+                'save_grade': '1',
+                'score': '100',
+                'max_score': '100',
+                'feedback': 'Unauthorized grade',
+            }).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.patch(
+                reverse('api-groups-detail', args=[group.pk]),
+                {'name': 'Unauthorized API rename'},
+                content_type='application/json',
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.patch(
+                reverse('api-groups-detail', args=[group.pk]),
+                {'assignment': self.assignment.pk},
+                content_type='application/json',
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(reverse('assignment_edit', args=[appointment_assignment.pk])).status_code,
+            403,
+        )
+
+    def test_group_api_rejects_delete_and_assignment_reassignment(self):
+        other_assignment = Assignment.objects.create(
+            course=self.course,
+            title='Different group assignment',
+            description='Another assignment in the same course.',
+            deadline=timezone.now() + timedelta(days=14),
+        )
+        task = Task.objects.create(
+            group=self.group,
+            title='Preserved task',
+            description='Keep this task when a group is archived.',
+            assigned_to=self.student,
+            created_by=self.lecturer,
+            deadline=timezone.now() + timedelta(days=3),
+        )
+        discussion = GroupMessage.objects.create(
+            group=self.group,
+            author=self.student,
+            body='Preserve this discussion.',
+        )
+        document = FileDocument.objects.create(
+            group=self.group,
+            uploaded_by=self.student,
+            file=SimpleUploadedFile('api-preserve.txt', b'preserve'),
+            original_filename='api-preserve.txt',
+            file_size=len(b'preserve'),
+        )
+        submission = Submission.objects.create(
+            assignment=self.assignment,
+            group=self.group,
+            submitted_by=self.student,
+            file=SimpleUploadedFile('api-submission.txt', b'submission'),
+            is_latest=True,
+        )
+        grade = Grade.objects.create(
+            submission=submission,
+            graded_by=self.lecturer,
+            score=90,
+            max_score=100,
+        )
+        event = GroupMembershipEvent.objects.create(
+            assignment=self.assignment,
+            group=self.group,
+            student=self.student,
+            actor=self.lecturer,
+            action=GroupMembershipEvent.ACTION_ADDED,
+        )
+
+        self.login(self.lecturer)
+        detail_url = reverse('api-groups-detail', args=[self.group.pk])
+        update_response = self.client.patch(
+            detail_url,
+            {'name': 'Team Alpha Updated'},
+            content_type='application/json',
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.group.refresh_from_db()
+        self.assertEqual(self.group.name, 'Team Alpha Updated')
+
+        reassignment_response = self.client.patch(
+            detail_url,
+            {'assignment': other_assignment.pk},
+            content_type='application/json',
+        )
+        self.assertEqual(reassignment_response.status_code, 400)
+        self.assertIn('assignment', reassignment_response.data)
+        self.group.refresh_from_db()
+        self.assertEqual(self.group.assignment, self.assignment)
+
+        delete_response = self.client.delete(detail_url)
+        self.assertEqual(delete_response.status_code, 405)
+        self.assertTrue(Group.objects.filter(pk=self.group.pk).exists())
+        self.assertTrue(GroupMembership.objects.filter(group=self.group).exists())
+        self.assertTrue(Task.objects.filter(pk=task.pk, group=self.group).exists())
+        self.assertTrue(GroupMessage.objects.filter(pk=discussion.pk, group=self.group).exists())
+        self.assertTrue(FileDocument.objects.filter(pk=document.pk, group=self.group).exists())
+        self.assertTrue(Submission.objects.filter(pk=submission.pk, group=self.group).exists())
+        self.assertTrue(Grade.objects.filter(pk=grade.pk, submission=submission).exists())
+        self.assertTrue(GroupMembershipEvent.objects.filter(pk=event.pk).exists())
+
+    def test_membership_history_paginates_without_truncating_old_events(self):
+        for _ in range(51):
+            GroupMembershipEvent.objects.create(
+                assignment=self.assignment,
+                group=self.group,
+                student=self.student,
+                actor=self.lecturer,
+                action=GroupMembershipEvent.ACTION_ADDED,
+            )
+
+        self.login(self.lecturer)
+        first_page = self.client.get(reverse('group_detail', args=[self.group.pk]))
+        history_page = first_page.context['membership_history_page']
+        self.assertEqual(history_page.paginator.count, 51)
+        self.assertEqual(len(history_page.object_list), 50)
+        self.assertTrue(history_page.has_next())
+        self.assertContains(first_page, 'Page 1 of 2')
+
+        second_page = self.client.get(
+            reverse('group_detail', args=[self.group.pk]),
+            {'membership_page': 2},
+        )
+        history_page = second_page.context['membership_history_page']
+        self.assertEqual(len(history_page.object_list), 1)
+        self.assertFalse(history_page.has_next())
+
+    def test_representative_can_remove_member_and_removal_survives_lost_enrolment(self):
+        appointment_assignment = Assignment.objects.create(
+            course=self.course,
+            title='Representative removal assignment',
+            description='Membership removal.',
+            deadline=timezone.now() + timedelta(days=14),
+            status=Assignment.STATUS_DRAFT,
+        )
+        appoint_assignment_class_representative(
+            self.lecturer,
+            appointment_assignment,
+            self.unassigned_student,
+        )
+        group = Group.objects.create(
+            assignment=appointment_assignment,
+            name='Removal group',
+        )
+        membership = GroupMembership.objects.create(
+            group=group,
+            student=self.student,
+        )
+        CourseEnrolment.objects.filter(
+            course=self.course,
+            student=self.student,
+        ).delete()
+        self.login(self.unassigned_student)
+        response = self.client.post(reverse('group_detail', args=[group.pk]), {
+            'membership_id': membership.pk,
+            'remove_member': '1',
+        })
+        self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+        self.assertFalse(GroupMembership.objects.filter(pk=membership.pk).exists())
+        event = GroupMembershipEvent.objects.get(
+            group=group,
+            student=self.student,
+            action=GroupMembershipEvent.ACTION_REMOVED,
+        )
+        self.assertEqual(event.student_number_snapshot, self.student.student_number)
+
+    def test_transfer_capacity_and_assignment_scope_fail_without_changing_source(self):
+        destination = Group.objects.create(
+            assignment=self.assignment,
+            name='Full transfer destination',
+            max_members=2,
+        )
+        GroupMembership.objects.create(group=destination, student=self.unassigned_student)
+        GroupMembership.objects.create(group=destination, student=self.invited_student)
+        membership = GroupMembership.objects.get(group=self.group, student=self.student)
+        self.login(self.lecturer)
+        response = self.client.post(reverse('group_detail', args=[self.group.pk]), {
+            'membership_id': membership.pk,
+            'destination_group': destination.pk,
+            'transfer_member': '1',
+        }, follow=True)
+        self.assertContains(response, 'maximum capacity')
+        membership.refresh_from_db()
+        self.assertEqual(membership.group, self.group)
+        self.assertFalse(
+            GroupMembershipEvent.objects.filter(
+                student=self.student,
+                action=GroupMembershipEvent.ACTION_TRANSFERRED,
+            ).exists()
+        )
+
+        other_assignment = Assignment.objects.create(
+            course=self.other_course,
+            title='Other course assignment',
+            description='Not the same assignment.',
+            deadline=timezone.now() + timedelta(days=14),
+        )
+        other_group = Group.objects.create(
+            assignment=other_assignment,
+            name='Other course group',
+        )
+        with self.assertRaises(ValidationError):
+            transfer_assignment_group_member(
+                self.lecturer,
+                membership.pk,
+                other_group.pk,
+            )
+        membership.refresh_from_db()
+        self.assertEqual(membership.group, self.group)
+
+    def test_lecturer_dissolves_group_without_deleting_historical_records(self):
+        group = Group.objects.create(
+            assignment=self.assignment,
+            name='Archived group',
+        )
+        membership = GroupMembership.objects.create(
+            group=group,
+            student=self.unassigned_student,
+        )
+        submission = Submission.objects.create(
+            assignment=self.assignment,
+            group=group,
+            submitted_by=self.unassigned_student,
+            file=SimpleUploadedFile('archive-submission.txt', b'preserve submission'),
+            is_latest=True,
+        )
+        grade = Grade.objects.create(
+            submission=submission,
+            graded_by=self.lecturer,
+            score=88,
+            max_score=100,
+        )
+        document = FileDocument.objects.create(
+            group=group,
+            uploaded_by=self.student,
+            file=SimpleUploadedFile('archive-document.txt', b'preserve file'),
+            original_filename='archive-document.txt',
+            file_size=len(b'preserve file'),
+        )
+        task = Task.objects.create(
+            group=group,
+            title='Archived task',
+            description='Preserve task on dissolution.',
+            assigned_to=self.unassigned_student,
+            created_by=self.lecturer,
+            deadline=timezone.now() + timedelta(days=3),
+        )
+        discussion = GroupMessage.objects.create(
+            group=group,
+            author=self.student,
+            body='Preserve discussion on dissolution.',
+        )
+
+        self.login(self.lecturer)
+        response = self.client.post(reverse('group_detail', args=[group.pk]), {
+            'dissolve_group': '1',
+        })
+        self.assertRedirects(response, reverse('group_detail', args=[group.pk]))
+        group.refresh_from_db()
+        self.assertEqual(group.status, Group.STATUS_CLOSED)
+        self.assertFalse(GroupMembership.objects.filter(pk=membership.pk).exists())
+        self.assertTrue(Submission.objects.filter(pk=submission.pk, group=group).exists())
+        self.assertTrue(Grade.objects.filter(pk=grade.pk, submission=submission).exists())
+        self.assertTrue(FileDocument.objects.filter(pk=document.pk, group=group).exists())
+        self.assertTrue(Task.objects.filter(pk=task.pk, group=group).exists())
+        self.assertTrue(GroupMessage.objects.filter(pk=discussion.pk, group=group).exists())
+        self.assertTrue(
+            GroupMembershipEvent.objects.filter(
+                group=group,
+                student=self.unassigned_student,
+                actor=self.lecturer,
+                action=GroupMembershipEvent.ACTION_REMOVED,
+            ).exists()
+        )
+
     def test_assignment_type_defaults_to_group_and_representative_is_assignment_scoped(self):
         self.assertEqual(self.assignment.assignment_type, Assignment.TYPE_GROUP)
         self.assignment.assignment_type = Assignment.TYPE_INDIVIDUAL
@@ -1948,6 +2323,16 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertFalse(user_manages_assignment(self.student, self.assignment))
         self.assertFalse(user_can_access_group_content(self.student, self.private_group))
         self.assertFalse(user_can_manage_assignment_groups(self.unassigned_student, self.assignment))
+
+        original_lecturer = self.course.lecturer
+        self.course.lecturer = self.student
+        self.course.save()
+        self.assertTrue(user_is_assignment_representative(self.student, self.assignment))
+        self.assertTrue(user_can_manage_assignment_groups(self.student, self.assignment))
+        self.assertFalse(user_manages_assignment(self.student, self.assignment))
+        self.assertFalse(user_can_access_group_content(self.student, self.private_group))
+        self.course.lecturer = original_lecturer
+        self.course.save()
 
         other_assignment = Assignment.objects.create(
             course=self.course,
@@ -2223,6 +2608,22 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertEqual(event.previous_group_name_snapshot, 'Team Alpha')
         self.assertNotEqual(student_id, event.student_id)
 
+    def test_group_management_admin_does_not_allow_hard_deletion(self):
+        group_admin = admin.site._registry[Group]
+        membership_admin = admin.site._registry[GroupMembership]
+        self.assertFalse(group_admin.has_delete_permission(
+            SimpleNamespace(user=self.administrator),
+        ))
+        self.assertFalse(membership_admin.has_add_permission(
+            SimpleNamespace(user=self.administrator),
+        ))
+        self.assertFalse(membership_admin.has_change_permission(
+            SimpleNamespace(user=self.administrator),
+        ))
+        self.assertFalse(membership_admin.has_delete_permission(
+            SimpleNamespace(user=self.administrator),
+        ))
+
     def test_individual_submission_migration_rollback_guard(self):
         migration = importlib.import_module(
             'core.migrations.0022_phase2_integrity'
@@ -2306,6 +2707,14 @@ class GroupAssignmentWorkflowTests(TestCase):
         self.assertRedirects(response, reverse('group_detail', args=[self.group.pk]))
         self.assertFalse(
             GroupMembership.objects.filter(group=self.group, student=self.student).exists()
+        )
+        self.assertTrue(
+            GroupMembershipEvent.objects.filter(
+                group=self.group,
+                student=self.student,
+                actor=self.lecturer,
+                action=GroupMembershipEvent.ACTION_REMOVED,
+            ).exists()
         )
         self.group.refresh_from_db()
         self.assertEqual(self.group.leader, self.peer)

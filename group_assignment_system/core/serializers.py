@@ -329,6 +329,12 @@ class GroupSerializer(serializers.ModelSerializer):
             'assignment_deadline',
         )
 
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields['assignment'].read_only = True
+        return fields
+
     def get_members(self, group):
         request = self.context.get('request')
         can_view_identifiers = bool(
@@ -376,6 +382,10 @@ class GroupSerializer(serializers.ModelSerializer):
         return assignment
 
     def validate(self, attrs):
+        if self.instance is not None and 'assignment' in self.initial_data:
+            raise serializers.ValidationError({
+                'assignment': 'A group assignment cannot be changed after creation.'
+            })
         if self.instance and attrs.get('initial_students'):
             raise serializers.ValidationError(
                 {

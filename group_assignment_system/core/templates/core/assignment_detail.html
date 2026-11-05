@@ -69,7 +69,7 @@
                                 {% for group in groups %}
                                     <tr>
                                         <td>
-                                            {% if can_manage %}
+                                            {% if can_view_group_formation %}
                                                 <a href="{% url 'group_detail' group.pk %}">{{ group.name }}</a>
                                             {% else %}
                                                 {{ group.name }}

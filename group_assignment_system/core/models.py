@@ -866,7 +866,10 @@ class GroupMembershipEvent(models.Model):
             })
         if student.role != User.ROLE_STUDENT:
             raise ValidationError('Membership events must refer to a student.')
-        if not CourseEnrolment.objects.filter(
+        if self.action not in (
+            self.ACTION_REMOVED,
+            self.ACTION_REJECTED,
+        ) and not CourseEnrolment.objects.filter(
             course_id=self.assignment.course_id,
             student_id=self.student_id,
         ).exists():

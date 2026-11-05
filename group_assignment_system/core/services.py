@@ -121,7 +121,11 @@ def user_manages_course(user, course):
 
 
 def user_manages_assignment(user, assignment):
-    return user_manages_course(user, assignment.course)
+    if not user.is_authenticated:
+        return False
+    if user.is_admin_role() or user.is_superuser:
+        return True
+    return user.is_lecturer() and user_manages_course(user, assignment.course)
 
 
 def user_is_assignment_representative(user, assignment):
@@ -291,6 +295,145 @@ def create_assignment_group(actor, assignment, name, description='', max_members
             'A selected student was allocated to another group at the same time. '
             'Refresh the page and try again.'
         ) from error
+
+
+@transaction.atomic
+def transfer_assignment_group_member(actor, membership_id, destination_group_id):
+    try:
+        membership_id = int(membership_id)
+        destination_group_id = int(destination_group_id)
+    except (TypeError, ValueError):
+        raise ValidationError('Select a valid group membership and destination.')
+    membership = GroupMembership.objects.filter(pk=membership_id).first()
+    if membership is None:
+        raise ValidationError('The selected group membership no longer exists.')
+    assignment = Assignment.objects.select_for_update().select_related('course').get(
+        pk=membership.assignment_id,
+    )
+    if not user_can_manage_assignment_groups(actor, assignment):
+        raise ValidationError(
+            'You are not authorized to manage groups for this assignment.'
+        )
+    membership = GroupMembership.objects.select_for_update().filter(
+        pk=membership_id,
+        assignment=assignment,
+    ).first()
+    if membership is None:
+        raise ValidationError('The membership changed while the transfer was starting.')
+
+    locked_groups = {
+        group.pk: group
+        for group in Group.objects.select_for_update().filter(
+            pk__in=(membership.group_id, destination_group_id),
+        ).select_related('assignment').order_by('pk')
+    }
+    source_group = locked_groups.get(membership.group_id)
+    destination_group = locked_groups.get(destination_group_id)
+    if source_group is None or destination_group is None:
+        raise ValidationError('The source or destination group no longer exists.')
+    if (
+        source_group.assignment_id != assignment.pk
+        or destination_group.assignment_id != assignment.pk
+        or destination_group.assignment.assignment_type != Assignment.TYPE_GROUP
+    ):
+        raise ValidationError(
+            'A student can only be transferred between groups for the same assignment.'
+        )
+    if source_group.pk == destination_group.pk:
+        raise ValidationError('Choose a different destination group.')
+    if source_group.status != Group.STATUS_ACTIVE:
+        raise ValidationError('Membership cannot be transferred from an inactive group.')
+    if destination_group.status != Group.STATUS_ACTIVE:
+        raise ValidationError('Students can only be transferred to an active group.')
+    if not CourseEnrolment.objects.filter(
+        course_id=assignment.course_id,
+        student_id=membership.student_id,
+    ).exists():
+        raise ValidationError('The student must be enrolled in the assignment course.')
+    if membership.status != GroupMembership.STATUS_APPROVED:
+        raise ValidationError('Only approved group members can be transferred.')
+    if destination_group.reserved_member_count() >= destination_group.capacity:
+        raise ValidationError('The destination group has reached its maximum capacity.')
+    if GroupMembership.objects.filter(
+        assignment=assignment,
+        student_id=membership.student_id,
+    ).exclude(pk=membership.pk).exclude(
+        status=GroupMembership.STATUS_REJECTED,
+    ).exists():
+        raise ValidationError('The student already has another membership for this assignment.')
+
+    previous_group = source_group
+    previous_leader_id = source_group.leader_id
+    try:
+        with transaction.atomic():
+            membership.group = destination_group
+            membership.assignment = assignment
+            membership.status = GroupMembership.STATUS_APPROVED
+            membership.save()
+            GroupMembershipEvent.objects.create(
+                assignment=assignment,
+                group=destination_group,
+                previous_group=previous_group,
+                student=membership.student,
+                actor=actor,
+                action=GroupMembershipEvent.ACTION_TRANSFERRED,
+            )
+            if previous_leader_id == membership.student_id:
+                next_leader = previous_group.memberships.filter(
+                    status=GroupMembership.STATUS_APPROVED,
+                ).exclude(pk=membership.pk).order_by('joined_at', 'pk').first()
+                previous_group.leader = next_leader.student if next_leader else None
+                previous_group.save()
+            return membership
+    except IntegrityError as error:
+        raise ValidationError(
+            'The transfer conflicted with another membership change. Refresh and retry.'
+        ) from error
+
+
+@transaction.atomic
+def dissolve_assignment_group(actor, group_id):
+    group = Group.objects.select_for_update().select_related(
+        'assignment__course',
+    ).filter(pk=group_id).first()
+    if group is None:
+        raise ValidationError('The selected group no longer exists.')
+    if not user_can_manage_assignment_groups(actor, group.assignment):
+        raise ValidationError(
+            'You are not authorized to dissolve groups for this assignment.'
+        )
+    if not (actor.is_admin_role() or actor.is_superuser or user_manages_assignment(
+        actor,
+        group.assignment,
+    )):
+        raise ValidationError(
+            'Only an administrator or authorized lecturer can dissolve a group.'
+        )
+    if group.status != Group.STATUS_ACTIVE:
+        raise ValidationError('Only active groups can be dissolved.')
+
+    memberships = list(
+        GroupMembership.objects.select_for_update().filter(group=group).select_related(
+            'student',
+        )
+    )
+    with transaction.atomic():
+        for membership in memberships:
+            if membership.status != GroupMembership.STATUS_REJECTED:
+                GroupMembershipEvent.objects.create(
+                    assignment=group.assignment,
+                    group=group,
+                    student=membership.student,
+                    actor=actor,
+                    action=GroupMembershipEvent.ACTION_REMOVED,
+                )
+        GroupMembership.objects.filter(pk__in=[
+            membership.pk for membership in memberships
+        ]).delete()
+        group.status = Group.STATUS_CLOSED
+        group.leader = None
+        group.save()
+    return group
 
 
 def user_is_group_member(user, group):

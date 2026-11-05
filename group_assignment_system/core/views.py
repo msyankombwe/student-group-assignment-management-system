@@ -6,8 +6,8 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
-from django.db import transaction
-from django.db.models import Count, F, Max, Prefetch, Q
+from django.db import IntegrityError, transaction
+from django.db.models import Count, Exists, F, Max, OuterRef, Prefetch, Q
 from django.middleware.csrf import get_token
 from django.http import FileResponse, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -78,6 +78,7 @@ from .serializers import (
 from .services import (
     can_manage_academic,
     create_assignment_group,
+    dissolve_assignment_group,
     log_audit,
     notify,
     record_activity,
@@ -87,6 +88,7 @@ from .services import (
     user_is_group_member,
     user_manages_course,
     user_manages_assignment,
+    transfer_assignment_group_member,
 )
 
 
@@ -1038,12 +1040,19 @@ def group_list(request):
         )
     elif user.is_student():
         groups = groups.filter(
-            memberships__student=user,
-            memberships__status__in=(
-                GroupMembership.STATUS_APPROVED,
-                GroupMembership.STATUS_PENDING,
-                GroupMembership.STATUS_INVITED,
-            ),
+            Q(
+                memberships__student=user,
+                memberships__status__in=(
+                    GroupMembership.STATUS_APPROVED,
+                    GroupMembership.STATUS_PENDING,
+                    GroupMembership.STATUS_INVITED,
+                ),
+            )
+            | Q(
+                assignment__representative_appointments__student=user,
+                assignment__representative_appointments__status='active',
+                assignment__course__enrolments__student=user,
+            )
         )
     else:
         return _forbidden(request)
@@ -1656,16 +1665,28 @@ def group_detail(request, pk):
         Group.objects.select_related('assignment__course'),
         pk=pk,
     )
-    if not user_can_access_group(request.user, group):
+    if not (
+        user_can_access_group(request.user, group)
+        or user_can_manage_assignment_groups(request.user, group.assignment)
+    ):
         return _forbidden(request)
 
     can_manage = (
         user_manages_assignment(request.user, group.assignment)
         or request.user.is_admin_role()
+        or request.user.is_superuser
     )
     can_manage_group = can_manage and group.status in (
         Group.STATUS_ACTIVE,
         Group.STATUS_PENDING,
+    )
+    can_view_membership = can_manage or user_can_manage_assignment_groups(
+        request.user,
+        group.assignment,
+    )
+    can_manage_memberships = can_manage_group or (
+        user_can_manage_assignment_groups(request.user, group.assignment)
+        and group.status == Group.STATUS_ACTIVE
     )
     own_membership = group.memberships.filter(student=request.user).first()
     can_lead = bool(
@@ -1680,7 +1701,17 @@ def group_detail(request, pk):
         group.status in (Group.STATUS_ACTIVE, Group.STATUS_PENDING)
         and (
             can_manage
-            or (group.assignment.allow_student_group_proposals and can_lead)
+            or (
+                not (
+                    request.user.is_student()
+                    and user_can_manage_assignment_groups(
+                        request.user,
+                        group.assignment,
+                    )
+                )
+                and group.assignment.allow_student_group_proposals
+                and can_lead
+            )
         )
     )
     can_view_private = can_manage or user_is_group_member(request.user, group)
@@ -1846,8 +1877,66 @@ def group_detail(request, pk):
             log_audit(request.user, f'Rejected {membership.student.username} for {group.name}')
             messages.success(request, 'Membership request rejected.')
             return redirect('group_detail', group.pk)
+        elif 'transfer_member' in request.POST:
+            if not can_manage_memberships:
+                return _forbidden(request)
+            try:
+                membership = transfer_assignment_group_member(
+                    request.user,
+                    request.POST.get('membership_id'),
+                    request.POST.get('destination_group'),
+                )
+            except ValidationError as error:
+                messages.error(request, '; '.join(error.messages))
+            else:
+                notify(
+                    membership.student,
+                    f'You were transferred to {membership.group.name} for '
+                    f'{group.assignment.title}.',
+                    Notification.TYPE_MEMBERSHIP,
+                    assignment=group.assignment,
+                    group=membership.group,
+                )
+                record_activity(
+                    request.user,
+                    'membership_transferred',
+                    f'Transferred {membership.student.username} from {group.name} '
+                    f'to {membership.group.name}',
+                    assignment=group.assignment,
+                    group=membership.group,
+                    contributor=membership.student,
+                )
+                log_audit(
+                    request.user,
+                    f'Transferred {membership.student.username} from {group.name} '
+                    f'to {membership.group.name}',
+                )
+                messages.success(request, 'Student transferred successfully.')
+            return redirect('group_detail', group.pk)
+        elif 'dissolve_group' in request.POST:
+            if not can_manage or request.user.is_student():
+                return _forbidden(request)
+            try:
+                group = dissolve_assignment_group(request.user, group.pk)
+            except ValidationError as error:
+                messages.error(request, '; '.join(error.messages))
+            else:
+                log_audit(request.user, f'Dissolved group {group.name}')
+                record_activity(
+                    request.user,
+                    'group_dissolved',
+                    f'Dissolved group {group.name}; historical records were retained.',
+                    assignment=group.assignment,
+                    group=group,
+                )
+                messages.success(
+                    request,
+                    'Group dissolved. Memberships were released; submissions, grades, '
+                    'files, tasks, and history remain archived with the group.',
+                )
+            return redirect('group_detail', group.pk)
         elif 'remove_member' in request.POST:
-            if not can_manage_group:
+            if not can_manage_memberships:
                 return _forbidden(request)
             with transaction.atomic():
                 group = Group.objects.select_for_update().get(pk=group.pk)
@@ -1961,12 +2050,12 @@ def group_detail(request, pk):
             return redirect('assignment_detail', group.assignment_id)
         elif 'add_member' in request.POST or (
             'student' in request.POST
-            and can_manage
+            and can_manage_memberships
             and 'body' not in request.POST
             and 'file' not in request.POST
             and 'score' not in request.POST
         ):
-            if not can_manage_group:
+            if not can_manage_memberships:
                 return _forbidden(request)
             membership_form = MembershipForm(request.POST, group=group)
             if membership_form.is_valid():
@@ -1991,6 +2080,12 @@ def group_detail(request, pk):
                             group.save()
                 except ValidationError as error:
                     membership_form.add_error('student', error)
+                except IntegrityError:
+                    membership_form.add_error(
+                        'student',
+                        'This student was allocated to another group at the same time. '
+                        'Refresh the page and try again.',
+                    )
                 else:
                     notify(
                         membership.student,
@@ -2196,10 +2291,45 @@ def group_detail(request, pk):
     members = User.objects.filter(
         group_memberships__group=group,
         group_memberships__status=GroupMembership.STATUS_APPROVED,
-    ).distinct() if can_view_private else ()
+    ).distinct() if can_view_membership else ()
     member_rows = group.memberships.filter(
-        status=GroupMembership.STATUS_APPROVED
-    ).select_related('student') if can_view_private else ()
+        status__in=(
+            GroupMembership.STATUS_APPROVED,
+            GroupMembership.STATUS_PENDING,
+            GroupMembership.STATUS_INVITED,
+        )
+    ).select_related(
+        'student',
+        'student__student_profile',
+    ).annotate(
+        is_course_registered=Exists(
+            CourseEnrolment.objects.filter(
+                course_id=group.assignment.course_id,
+                student_id=OuterRef('student_id'),
+            )
+        )
+    ) if can_view_membership else ()
+    transfer_destinations = group.assignment.groups.filter(
+        status=Group.STATUS_ACTIVE,
+    ).exclude(pk=group.pk).order_by('name') if can_manage_memberships else ()
+    membership_history_page = (
+        Paginator(
+            group.assignment.membership_events.select_related(
+                'actor',
+                'student',
+                'group',
+                'previous_group',
+            ),
+            50,
+        ).get_page(request.GET.get('membership_page'))
+        if can_view_membership
+        else None
+    )
+    membership_history = (
+        membership_history_page.object_list
+        if membership_history_page
+        else ()
+    )
     pending_memberships = group.memberships.filter(
         status__in=(GroupMembership.STATUS_PENDING, GroupMembership.STATUS_INVITED)
     ).select_related('student')
@@ -2229,9 +2359,14 @@ def group_detail(request, pk):
             'group': group,
             'members': members,
             'member_rows': member_rows,
+            'transfer_destinations': transfer_destinations,
+            'membership_history': membership_history,
+            'membership_history_page': membership_history_page,
             'tasks': tasks,
             'can_manage': can_manage,
             'can_manage_group': can_manage_group,
+            'can_view_membership': can_view_membership,
+            'can_manage_memberships': can_manage_memberships,
             'can_lead': can_lead,
             'can_invite': can_invite,
             'can_view_private': can_view_private,
@@ -2890,6 +3025,7 @@ class AssignmentViewSet(viewsets.ModelViewSet):
 class GroupViewSet(viewsets.ModelViewSet):
     serializer_class = GroupSerializer
     permission_classes = [GroupManagementPermission]
+    http_method_names = ['get', 'post', 'put', 'patch', 'head', 'options']
 
     def get_queryset(self):
         user = self.request.user
