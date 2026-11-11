@@ -94,6 +94,8 @@
                 <p class="small text-secondary">This archives the group and releases its memberships. Submissions, grades, files, tasks, and history remain attached to the archived group.</p>
                 <form method="post" onsubmit="return confirm('Dissolve this group and release its members? Historical records will be retained.');">
                     {% csrf_token %}
+                    <label class="form-label" for="archive-reason">Reason for archiving</label>
+                    <textarea class="form-control mb-2" id="archive-reason" name="archive_reason" rows="2" maxlength="1000"></textarea>
                     <button class="btn btn-outline-danger" type="submit" name="dissolve_group" value="1">Dissolve group</button>
                 </form>
             {% endif %}

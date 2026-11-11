@@ -9,6 +9,7 @@ from .models import (
     ActivityLog,
     AdministratorProfile,
     Assignment,
+    AssignmentClassRepresentative,
     AuditLog,
     ContributionActivity,
     Course,
@@ -228,6 +229,12 @@ class GroupMembershipEventAdmin(admin.ModelAdmin):
         'student_number_snapshot',
         'actor_username_snapshot',
         'actor_full_name_snapshot',
+        'actor_role_snapshot',
+        'course_code_snapshot',
+        'course_name_snapshot',
+        'previous_status',
+        'new_status',
+        'reason',
     )
     readonly_fields = (
         'assignment',
@@ -240,11 +247,67 @@ class GroupMembershipEventAdmin(admin.ModelAdmin):
         'assignment_title_snapshot',
         'group_name_snapshot',
         'previous_group_name_snapshot',
+        'actor_role_snapshot',
+        'actor_appointment',
+        'representative_appointment',
+        'course_code_snapshot',
+        'course_name_snapshot',
+        'previous_status',
+        'new_status',
+        'reason',
         'student_username_snapshot',
         'student_full_name_snapshot',
         'student_number_snapshot',
         'actor_username_snapshot',
         'actor_full_name_snapshot',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AssignmentClassRepresentative)
+class AssignmentClassRepresentativeAdmin(admin.ModelAdmin):
+    list_display = (
+        'student_full_name_snapshot',
+        'student_number_snapshot',
+        'assignment',
+        'status',
+        'appointed_by_full_name_snapshot',
+        'appointed_at',
+        'ended_by_full_name_snapshot',
+        'ended_at',
+    )
+    list_filter = ('status', 'assignment__course')
+    search_fields = (
+        'student_username_snapshot',
+        'student_full_name_snapshot',
+        'student_number_snapshot',
+        'appointed_by_username_snapshot',
+        'appointed_by_full_name_snapshot',
+    )
+    readonly_fields = (
+        'assignment',
+        'student',
+        'student_username_snapshot',
+        'student_full_name_snapshot',
+        'student_number_snapshot',
+        'appointed_by',
+        'appointed_by_username_snapshot',
+        'appointed_by_full_name_snapshot',
+        'appointed_at',
+        'status',
+        'ended_at',
+        'end_reason',
+        'ended_by',
+        'ended_by_username_snapshot',
+        'ended_by_full_name_snapshot',
     )
 
     def has_add_permission(self, request):

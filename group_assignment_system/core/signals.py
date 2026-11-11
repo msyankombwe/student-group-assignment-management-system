@@ -5,6 +5,7 @@ from django.utils import timezone
 from .models import (
     AdministratorProfile,
     AssignmentClassRepresentative,
+    GroupMembershipEvent,
     LecturerProfile,
     StudentProfile,
     User,
@@ -35,4 +36,13 @@ def close_representative_appointments_for_deleted_user(sender, instance, **kwarg
         AssignmentClassRepresentative.objects.filter(pk=appointment.pk).update(
             status=AssignmentClassRepresentative.STATUS_REMOVED,
             ended_at=timezone.now(),
+            end_reason='Automatically ended because the representative account was deleted.',
+        )
+        GroupMembershipEvent.objects.create(
+            assignment=appointment.assignment,
+            student=instance,
+            actor=None,
+            action=GroupMembershipEvent.ACTION_REPRESENTATIVE_REVOKED,
+            representative_appointment=appointment,
+            reason='Automatically ended because the representative account was deleted.',
         )

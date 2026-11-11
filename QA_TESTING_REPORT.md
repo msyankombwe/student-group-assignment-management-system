@@ -1,9 +1,9 @@
 # UNILUS SGAMS Quality & Security Test Report
 
-**Test date:** 31 October 2026
-**Scope:** Django application, database-backed workflows, role authorization, report exports, and rendered UI smoke checks.
-**Test method:** Automated Django `TestCase` suite plus Django system/deployment checks.
-**Database:** Django test database for automated tests; existing local SQLite database for browser smoke checks. No external service or live Moodle integration was tested.
+**Test date:** 11 November 2026
+**Scope:** Django workflows, assignment-level student representatives, role and assignment authorization, immutable group audit events, filtered reports/CSV, and read-only browser smoke checks.
+**Test method:** Automated Django `TestCase` suite, focused representative/audit suite, Python compilation, Django system/migration checks, and a live login-page browser smoke check.
+**Database:** Automated tests used Django's isolated test database. The existing local SQLite database was inspected read-only; `PRAGMA integrity_check` returned `ok` and 24 core migrations are recorded. No production service or live Moodle integration was tested.
 
 ## Test results
 
@@ -17,6 +17,10 @@
 | RBAC-02 | Student access to another group | Private group data and files are denied; scoped lists omit unrelated groups/tasks. | `test_nonmember_cannot_view_group`, `test_invited_student_cannot_view_group_private_content`, `test_group_and_task_navigation_pages_are_role_scoped`, and file/download scope tests passed. | PASS |
 | RBAC-03 | Lecturer cross-course access | Lecturer operations and reports only expose managed courses. | `test_lecturer_cannot_edit_assignment_for_another_lecturers_course`, `test_lecturer_submission_list_is_scoped_to_managed_courses`, and report-scope tests passed. | PASS |
 | RBAC-04 | Administrator functions | Administrator role can manage authorized records and access administrative pages. | `test_administrator_role_can_manage_django_admin_without_superuser_status` and administrator course/session tests passed. | PASS |
+| REP-01 | Assignment representative appointment, replacement, and revocation | Only a managing lecturer or administrator can appoint/reassign/revoke an active representative; candidates are active course-enrolled students; actions are audited. | Dedicated tests exercised lecturer appointment, administrator replacement, rejection of unenrolled candidates and unmanaged lecturers, revocation reasons, actor/course snapshots, and post-revocation access loss. | PASS |
+| REP-02 | Representative assignment scope and lecturer oversight | Representatives can create/manage memberships only within the appointed assignment; cannot access other assignments or lecturer-only settings; lecturers retain correction/removal authority. | Existing and new tests cover cross-assignment create/group detail denial, assignment edit/grade denial, and lecturer group correction and membership removal. | PASS |
+| AUDIT-01 | Audit dashboard authorization, filters, pagination, and CSV | Lecturer data is course-scoped; administrators see system-wide records; students/representatives are denied; filters/export remain scoped. | Focused tests cover lecturer/admin access, student/representative denials, assignment/group query tampering, course/assignment/student/actor/action/date filters, pagination, and CSV row accuracy/scope. | PASS |
+| AUDIT-02 | Historical snapshots and metric accuracy | Historical blank snapshots remain unknown; new events capture available snapshots; counters represent distinct recorded event types. | Tests verify “Not recorded” in HTML/CSV, no role inference for historical rows, fresh event snapshots, and separate group-created/added/removed/transferred/archived/role metrics. | PASS |
 | COURSE-01 | Course creation and academic calendar management | Administrator can create/manage courses, lecturer links, semesters, academic years, and roster; non-admins are denied. | `test_administrator_can_create_course_and_assign_a_lecturer`, `test_administrator_manages_academic_years_semesters_courses_and_roster`, `test_lecturers_cannot_manage_courses`, and `test_students_cannot_manage_courses` passed. | PASS |
 | ASSIGN-01 | Assignment creation, publication, editing, and closure | Authorized lecturer can manage assignments for managed active courses; required values, dates, and group sizes are validated. | `test_lecturer_creates_publishes_edits_and_closes_assignment`, `test_lecturer_assignment_creation_is_limited_to_assigned_active_courses`, and `test_assignment_forms_reject_invalid_publication_deadlines_and_group_sizes` passed. | PASS |
 | GROUP-01 | Group proposal, approval, rejection, and invitations | Student proposals and join requests await lecturer action; lecturer can approve/reject; invitations behave as configured. | Proposal/invitation, join request, approval, rejection, and re-application workflow tests passed. | PASS |
@@ -34,11 +38,13 @@
 | PEER-01 | Peer evaluation validation and confidentiality | Self/duplicate/disabled evaluations are rejected; authorized lecturer can view scoped summaries. | Peer evaluation validation, criteria, setting, and confidential-report tests passed. | PASS |
 | REPORT-01 | Analytics accuracy, filters, and role scope | Report types render with scoped data; unauthorized cross-course/group filters are rejected; CSV columns/data reflect filtered results. | Report accuracy, role scope, filter, and CSV export tests passed, including injection-like group filter input (403). | PASS |
 | REPORT-02 | Spreadsheet formula injection in contribution export | User-controlled text is exported as literal text, not a spreadsheet formula. | Security review identified the issue; after remediation, `test_contribution_csv_escapes_spreadsheet_formula_cells` passed for a leading-space formula payload. | PASS |
-| UI-01 | Responsive/navigation smoke check | Role navigation resolves to useful pages; narrow viewport has no horizontal page overflow. | Browser smoke check opened the documents/discussions workspace at the browser's effective 300 CSS-pixel viewport; page width matched viewport and scoped group links rendered. | PASS |
+| UI-01 | Login page browser smoke check | Login page renders with usable navigation and labeled credentials. | Live read-only browser refresh returned the SGAMS login page and its login/password-reset controls. No authenticated write workflow was performed against the preserved local database. | PASS |
 
 ## Execution summary
 
-- Full Django test suite after the corrective change: **67 tests passed, 0 failed**.
+- Full Django suite: **128 tests passed, 0 failed**.
+- Dedicated audit/representative suite (`python manage.py test core.tests_audit_dashboard`): **18 tests passed, 0 failed**.
+- Python compilation of changed forms/views/test modules: **passed**.
 - `python manage.py check`: **passed**, no issues.
 - `python manage.py makemigrations --check --dry-run`: **passed**, no pending model migrations.
 - `git diff --check`: **passed**.
@@ -58,4 +64,4 @@
 - Discussion content escaping was directly regression-tested. This does not constitute a formal template-wide static XSS proof.
 - File upload extension/size validation and access-checked downloads were tested. The application stores uploads locally; production deployment must keep the media directory private and serve downloads only through access-checked views.
 - Session security flags are enabled in production configuration (`DEBUG=False`); the development configuration intentionally allows local HTTP.
-- This was an application-level test run, not a penetration test or independent infrastructure assessment. Moodle upload/grade synchronization is outside scope and is not claimed.
+- This was application-level automated security/regression testing, not a penetration test or independent infrastructure assessment. The browser check was limited to a read-only login-page smoke test; formal stakeholder UAT, assistive-technology testing, and production infrastructure testing remain outstanding. Moodle upload/grade synchronization is outside scope and is not claimed.

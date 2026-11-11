@@ -65,6 +65,7 @@
                             <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=progress">Progress</a></li>
                             <li class="nav-item"><a class="nav-link" href="{% url 'submission_list' %}" {% if request.resolver_match.url_name == 'submission_list' %}aria-current="page"{% endif %}>Submissions</a></li>
                             <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}" {% if request.resolver_match.url_name == 'reports' %}aria-current="page"{% endif %}>Reports</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'audit_dashboard' %}" {% if request.resolver_match.url_name == 'audit_dashboard' %}aria-current="page"{% endif %}>Group Audit</a></li>
                         {% elif request.user.is_admin_role or request.user.is_superuser %}
                             <li class="nav-item"><a class="nav-link" href="{% url 'course_list' %}" {% if request.resolver_match.url_name == 'course_list' or request.resolver_match.url_name == 'course_detail' %}aria-current="page"{% endif %}>Courses</a></li>
                             <li class="nav-item"><a class="nav-link" href="{% url 'assignment_list' %}" {% if request.resolver_match.url_name == 'assignment_list' or request.resolver_match.url_name == 'assignment_detail' %}aria-current="page"{% endif %}>Assignments</a></li>
@@ -73,6 +74,7 @@
                             <li class="nav-item"><a class="nav-link" href="{% url 'admin:index' %}">Administration</a></li>
                             <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}?type=admin_activity">Activity Logs</a></li>
                             <li class="nav-item"><a class="nav-link" href="{% url 'reports' %}" {% if request.resolver_match.url_name == 'reports' %}aria-current="page"{% endif %}>Reports</a></li>
+                            <li class="nav-item"><a class="nav-link" href="{% url 'audit_dashboard' %}" {% if request.resolver_match.url_name == 'audit_dashboard' %}aria-current="page"{% endif %}>Group Audit</a></li>
                         {% endif %}
                         <li class="nav-item"><a class="nav-link" href="{% url 'notifications' %}" {% if request.resolver_match.url_name == 'notifications' %}aria-current="page"{% endif %}>
                             Notifications

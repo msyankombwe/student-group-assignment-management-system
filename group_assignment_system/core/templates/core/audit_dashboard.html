@@ -1,0 +1,172 @@
+{% extends "core/base.html" %}
+{% block title %}Group Audit & Activity · UNILUS SGAMS{% endblock %}
+{% block content %}
+<header class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Group Audit &amp; Activity</h1>
+        <p class="text-secondary mb-0">Review accountable group formation, membership and representative actions within your authorized assignments.</p>
+    </div>
+    <a class="btn btn-outline-primary" href="{% url 'audit_dashboard' %}?{% if csv_query %}{{ csv_query }}&amp;{% endif %}format=csv">Export Filtered CSV</a>
+</header>
+
+<form method="get" class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            {% for field in form %}
+                <div class="col-sm-6 col-lg-3">
+                    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+                </div>
+            {% endfor %}
+            <div class="col-12 d-flex flex-wrap gap-2">
+                <button class="btn btn-primary" type="submit">Apply Filters</button>
+                <a class="btn btn-outline-secondary" href="{% url 'audit_dashboard' %}">Clear Filters</a>
+            </div>
+        </div>
+        {% if form.non_field_errors %}<div class="alert alert-danger mt-3 mb-0">{{ form.non_field_errors }}</div>{% endif %}
+    </div>
+</form>
+
+<section class="mb-4" aria-labelledby="audit-summary-heading">
+    <h2 class="h5" id="audit-summary-heading">Activity Summary</h2>
+    <div class="row row-cols-2 row-cols-lg-3 row-cols-xl-5 g-3">
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Groups Created</div><strong class="fs-4">{{ action_counts.group_created|default:0 }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="small text-secondary">Students Added</div><strong class="fs-4">{{ action_counts.added|default:0 }}</strong></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Membership Removals</div><strong class="fs-4">{{ action_counts.removed|default:0 }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Student Transfers</div><strong class="fs-4">{{ action_counts.transferred|default:0 }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Groups Dissolved</div><strong class="fs-4">{{ action_counts.group_archived|default:0 }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Membership Approvals</div><strong class="fs-4">{{ action_counts.approved|default:0 }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Membership Rejections</div><strong class="fs-4">{{ action_counts.rejected|default:0 }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Representative Actions</div><strong class="fs-4">{{ representative_interventions }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Lecturer Actions</div><strong class="fs-4">{{ lecturer_interventions }}</strong></div></div></div>
+        <div class="col"><div class="card h-100"><div class="card-body"><div class="small text-secondary">Administrator Actions</div><strong class="fs-4">{{ administrator_interventions }}</strong></div></div></div>
+    </div>
+</section>
+
+<section id="recent-activity" class="card shadow-sm mb-4" aria-labelledby="recent-activity-heading">
+    <div class="card-body">
+        <h2 class="h5" id="recent-activity-heading">Recent Activity</h2>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle">
+                <thead><tr>
+                    <th scope="col">Date and Time</th><th scope="col">User</th><th scope="col">Role</th>
+                    <th scope="col">Action</th><th scope="col">Student ID</th><th scope="col">Student Name</th>
+                    <th scope="col">Previous Status</th><th scope="col">New Status</th>
+                    <th scope="col">Previous Group</th><th scope="col">Group</th><th scope="col">Assignment</th><th scope="col">Course</th>
+                </tr></thead>
+                <tbody>
+                    {% for event in events %}
+                        <tr>
+                            <td><time datetime="{{ event.occurred_at|date:'c' }}">{{ event.occurred_at }}</time></td>
+                            <td>{{ event.actor_full_name_snapshot|default:event.actor_username_snapshot|default:"Not recorded" }}</td>
+                            <td>{{ event.get_actor_role_snapshot_display|default:"Not recorded" }}</td>
+                            <td>{{ event.get_action_display }}{% if event.reason %}<div class="small text-secondary">{{ event.reason|truncatechars:120 }}</div>{% endif %}</td>
+                            <td>{% if event.student_number_snapshot %}{{ event.student_number_snapshot }}{% elif event.action == "group_created" or event.action == "group_updated" or event.action == "group_archived" %}—{% else %}Not recorded{% endif %}</td>
+                            <td>{% if event.student_full_name_snapshot %}{{ event.student_full_name_snapshot }}{% elif event.student_username_snapshot %}{{ event.student_username_snapshot }}{% elif event.action == "group_created" or event.action == "group_updated" or event.action == "group_archived" %}—{% else %}Not recorded{% endif %}</td>
+                            <td>{% if event.previous_status %}{{ event.get_previous_status_display }}{% elif event.action == "group_created" or event.action == "group_updated" or event.action == "group_archived" or event.action == "rep_appointed" or event.action == "rep_replaced" or event.action == "rep_revoked" %}—{% else %}Not recorded{% endif %}</td>
+                            <td>{% if event.new_status %}{{ event.get_new_status_display }}{% elif event.action == "group_created" or event.action == "group_updated" or event.action == "group_archived" or event.action == "rep_appointed" or event.action == "rep_replaced" or event.action == "rep_revoked" %}—{% else %}Not recorded{% endif %}</td>
+                            <td>{% if event.previous_group_name_snapshot %}{{ event.previous_group_name_snapshot }}{% elif event.action == "removed" and event.group_name_snapshot %}{{ event.group_name_snapshot }}{% elif event.action == "transferred" %}Not recorded{% else %}—{% endif %}</td>
+                            <td>{% if event.group_name_snapshot %}{{ event.group_name_snapshot }}{% elif event.action == "rep_appointed" or event.action == "rep_replaced" or event.action == "rep_revoked" %}—{% else %}Not recorded{% endif %}</td>
+                            <td>{{ event.assignment_title_snapshot|default:"Not recorded" }}</td>
+                            <td>{{ event.course_code_snapshot|default:event.course_name_snapshot|default:"Not recorded" }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="12" class="text-secondary">No audit activity matches these filters.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if page_obj.has_other_pages %}
+            <nav aria-label="Recent activity pages">
+                <ul class="pagination pagination-sm mb-0">
+                    {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?{% if csv_query %}{{ csv_query }}&amp;{% endif %}page={{ page_obj.previous_page_number }}#recent-activity">Previous</a></li>{% endif %}
+                    <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+                    {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?{% if csv_query %}{{ csv_query }}&amp;{% endif %}page={{ page_obj.next_page_number }}#recent-activity">Next</a></li>{% endif %}
+                </ul>
+            </nav>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card shadow-sm mb-4" aria-labelledby="representative-activity-heading">
+    <div class="card-body">
+        <h2 class="h5" id="representative-activity-heading">Representative Activity &amp; Appointment History</h2>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead><tr>
+                    <th scope="col">Representative</th><th scope="col">Student ID</th><th scope="col">Assignment</th>
+                    <th scope="col">Appointed By</th><th scope="col">Appointed At</th><th scope="col">Status</th>
+                    <th scope="col">Ended By</th><th scope="col">Ended At</th><th scope="col">Groups Created</th>
+                    <th scope="col">Students Allocated</th><th scope="col">Students Removed</th>
+                    <th scope="col">Transfers</th><th scope="col">Last Activity</th>
+                </tr></thead>
+                <tbody>
+                    {% for row in representative_activity %}
+                        <tr>
+                            <td>{{ row.appointment.student_full_name_snapshot|default:row.appointment.student_username_snapshot }}</td>
+                            <td>{{ row.appointment.student_number_snapshot|default:"Student ID Not Provided" }}</td>
+                            <td>{{ row.appointment.assignment.title }}</td>
+                            <td>{{ row.appointment.appointed_by_full_name_snapshot|default:row.appointment.appointed_by_username_snapshot|default:"—" }}</td>
+                            <td>{{ row.appointment.appointed_at }}</td>
+                            <td>{{ row.appointment.get_status_display }}</td>
+                            <td>{{ row.appointment.ended_by_full_name_snapshot|default:row.appointment.ended_by_username_snapshot|default:"—" }}</td>
+                            <td>{{ row.appointment.ended_at|default:"—" }}</td>
+                            <td>{{ row.groups_created }}</td><td>{{ row.students_allocated }}</td>
+                            <td>{{ row.students_removed }}</td><td>{{ row.transfers }}</td>
+                            <td>{{ row.last_activity|default:"—" }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="13" class="text-secondary">No representative appointments match these filters.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if representative_page.has_other_pages %}
+            <nav aria-label="Representative activity pages">
+                <ul class="pagination pagination-sm mb-0">
+                    {% if representative_page.has_previous %}<li class="page-item"><a class="page-link" href="?{% if csv_query %}{{ csv_query }}&amp;{% endif %}representative_page={{ representative_page.previous_page_number }}#representative-activity-heading">Previous</a></li>{% endif %}
+                    <li class="page-item disabled"><span class="page-link">Page {{ representative_page.number }} of {{ representative_page.paginator.num_pages }}</span></li>
+                    {% if representative_page.has_next %}<li class="page-item"><a class="page-link" href="?{% if csv_query %}{{ csv_query }}&amp;{% endif %}representative_page={{ representative_page.next_page_number }}#representative-activity-heading">Next</a></li>{% endif %}
+                </ul>
+            </nav>
+        {% endif %}
+    </div>
+</section>
+
+<section id="staff-interventions" class="card shadow-sm" aria-labelledby="staff-interventions-heading">
+    <div class="card-body">
+        <h2 class="h5" id="staff-interventions-heading">Lecturer &amp; Administrator Interventions</h2>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead><tr><th scope="col">Date and Time</th><th scope="col">Staff Member</th><th scope="col">Role</th><th scope="col">Action</th><th scope="col">Student ID</th><th scope="col">Student</th><th scope="col">Group</th><th scope="col">Assignment</th></tr></thead>
+                <tbody>
+                    {% for event in staff_events %}
+                        <tr>
+                            <td><time datetime="{{ event.occurred_at|date:'c' }}">{{ event.occurred_at }}</time></td>
+                            <td>{{ event.actor_full_name_snapshot|default:event.actor_username_snapshot|default:"System" }}</td>
+                            <td>{{ event.get_actor_role_snapshot_display|default:"System" }}</td>
+                            <td>{{ event.get_action_display }}{% if event.reason %}<div class="small text-secondary">{{ event.reason|truncatechars:120 }}</div>{% endif %}</td>
+                            <td>{% if event.student_id or event.student_number_snapshot %}{{ event.student_number_snapshot|default:"Student ID Not Provided" }}{% else %}—{% endif %}</td>
+                            <td>{{ event.student_full_name_snapshot|default:event.student_username_snapshot|default:"—" }}</td>
+                            <td>{{ event.group_name_snapshot|default:"—" }}</td>
+                            <td>{{ event.assignment_title_snapshot }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="8" class="text-secondary">No lecturer or administrator interventions match these filters.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if staff_page_obj.has_other_pages %}
+            <nav aria-label="Staff intervention pages">
+                <ul class="pagination pagination-sm mb-0">
+                    {% if staff_page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?{% if csv_query %}{{ csv_query }}&amp;{% endif %}staff_page={{ staff_page_obj.previous_page_number }}#staff-interventions">Previous</a></li>{% endif %}
+                    <li class="page-item disabled"><span class="page-link">Page {{ staff_page_obj.number }} of {{ staff_page_obj.paginator.num_pages }}</span></li>
+                    {% if staff_page_obj.has_next %}<li class="page-item"><a class="page-link" href="?{% if csv_query %}{{ csv_query }}&amp;{% endif %}staff_page={{ staff_page_obj.next_page_number }}#staff-interventions">Next</a></li>{% endif %}
+                </ul>
+            </nav>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

@@ -64,6 +64,7 @@ Important integrity and access rules include one group per student per assignmen
 | Academic administration | Administrator course, lecturer, semester, and academic-year management; Django admin for account administration |
 | Courses & assignments | Course listing/details; lecturer assignment create, publish, edit, close, and instructions |
 | Groups & membership | Lecturer-created groups, student proposals, invitations, join requests, approvals/rejections, member management |
+| Assignment representatives | Assignment-specific appointment/replacement/revocation, enrolled-student eligibility, representative group creation and membership changes, immutable action history |
 | Tasks & deadlines | Group task creation and assignment, priority, status/progress updates, internal deadlines, overdue display |
 | Collaboration workspace | Private group documents with version metadata, discussions, members, task activity, activity history |
 | Contributions | Recorded in-app activity summaries and lecturer reports; evidence only, not a grade or effort score |
@@ -75,10 +76,11 @@ Important integrity and access rules include one group per student per assignmen
 ## 6. Roles and permissions
 
 - **Student:** sees enrolled-course assignments and their own group memberships. Collaboration content is limited to approved groups; students can perform permitted group and task activities, submit work, view released feedback, and evaluate peers when enabled.
-- **Lecturer/supervisor:** manages assigned courses and their assignments/groups; can review group progress, documents, messages, submissions, contribution evidence, and feedback for managed courses.
+- **Assignment representative:** an active student enrolled in the assignment's course, appointed for one group assignment by its managing lecturer or an administrator. The representative can create groups and make permitted membership changes only for that assignment. The representative cannot edit assignment details, approve/reject group requests, dissolve groups, grade, or manage feedback. Appointment does not grant lecturer privileges or access to other assignments in the same course.
+- **Lecturer/supervisor:** manages assigned courses and their assignments/groups; can appoint, replace, and revoke assignment representatives; review and correct group/membership records; approve/reject proposals; dissolve groups; and review representative activity, submissions, contribution evidence, grades, and feedback for managed courses.
 - **Administrator:** manages accounts through the Django administration site, academic calendar and courses, and views administrative reports.
 
-Server-side scope checks apply independently of what navigation displays. The administrator role and Django `is_superuser` flag are distinct; a demonstration administrator has both for access to Django admin.
+Server-side scope checks apply independently of what navigation displays. Group endpoints, membership services, and audit queries verify assignment/course scope. The administrator role and Django `is_superuser` flag are distinct; a demonstration administrator has both for access to Django admin.
 
 ## 7. Installation and database setup
 
@@ -168,6 +170,18 @@ This sequence creates fresh workflow records while retaining the seeded examples
 7. **Record submission and feedback.** As an approved group student, upload a submission through the group workspace. As the lecturer, review the record and save feedback; demonstrate that unpublished feedback is not visible to students, then publish it and verify access on the submission receipt.
 8. **Show notifications and reports.** Review an in-app notification as the student, then use an authorized lecturer report filter and CSV export.
 
+### Assignment representative scenario
+
+1. Sign in as `lecturer.banda` and open a group assignment in a course the lecturer manages.
+2. In **Assignment Representative**, select an active, enrolled student. Confirm the chooser labels include student ID and full name, then appoint the representative.
+3. Open the assignment as that student. Confirm group creation is available for this assignment, but instructions remain private while the assignment is a draft and the edit/grade controls are absent.
+4. Create a group and allocate only active course-enrolled students. Attempting an already allocated or unenrolled student is rejected. Open a different assignment, including one in the same course, and confirm representative controls are denied there.
+5. As the lecturer, review the group and membership history. Correct a group name, add/remove/transfer a member as appropriate, and verify the corresponding audit events identify the lecturer and preserve the prior status/group.
+6. As the lecturer, appoint a different representative or revoke the current appointment with a reason. Verify the appointment status/history and representative event are recorded, then confirm the former representative can no longer create groups or manage memberships for that assignment.
+7. Attempt assignment editing and grading as the representative; these requests must be denied. Complete the grading/feedback demonstration as the lecturer.
+
+Audit history is append-only through the application. New events store actor, course, assignment, student, group, status, and representative snapshots where those values are available. Historical rows are retained; missing snapshots are shown as **Not recorded** and are not inferred from current users or courses.
+
 For the fastest “ready-made data” walkthrough, use seeded Alpha to show documents, messages, task progress, contribution evidence, a submission, and published feedback. To demonstrate proposal/approval from a clean starting state, create a **new** BIT326 assignment: the seeded students already have groups for the preloaded assignment, but group membership uniqueness is scoped to each assignment.
 
 ## 11. Final quality-check record
@@ -176,11 +190,15 @@ Checks actually run for this demonstration preparation:
 
 - All migrations were applied on the local development database, and `seed_demo_data` was run successfully to populate it.
 - The `seed_demo_data` command is covered by an automated test for repeatable record counts, seeded documents/contributions/notifications, and successful demo-account login plus role page access.
-- The full Django suite passed after the demo-preparation changes: **68 tests passed**.
+- The full Django `core` suite passed on 11 November 2026: **128 tests passed, 0 failed**.
+- The focused audit/representative suite passed: **18 tests passed, 0 failed**.
 - Django `check` and migration consistency checks passed at the latest full code check.
+- `py_compile` passed for the changed Django forms, views, and audit/representative tests. `makemigrations --check --dry-run` reported no model changes without migrations.
+- The existing SQLite database passed a read-only integrity check and reported 24 applied core migrations. The automated test runner used an isolated test database; no database reset or data-changing UAT was performed.
 - Role workflows, file access/upload validation, notifications, submission/feedback, peer review, reports, CSRF, invalid login, and discussion HTML escaping have automated coverage.
+- Assignment representative appointment, replacement, revocation, course-enrolment checks, assignment scoping, lecturer oversight, audit filters, CSV exports, and historical snapshot rendering have dedicated automated coverage.
 - A local runserver started successfully and served the login page with HTTP 200; automated tests also logged in as each role and loaded its dashboard and representative pages. Browser smoke checks previously confirmed role navigation and responsive pages render, with no horizontal page overflow at the tested narrow viewport.
-- The current source was tested with Django's test client and local runserver browser checks in this environment. A separate clean-machine installation and a real PostgreSQL deployment were not performed.
+- The latest browser check refreshed the login page without authenticated writes to the existing database. A separate clean-machine installation, a real PostgreSQL deployment, formal stakeholder UAT, assistive-technology testing, and independent penetration testing were not performed.
 
 ## 12. Feature status, limitations, and future work
 
@@ -189,6 +207,7 @@ Checks actually run for this demonstration preparation:
 - Django account login/logout, password reset flow, role-scoped pages and data, administrator Django admin access.
 - Course/calendar and assignment management.
 - Lecturer-created groups and student-proposed groups/invitations/approval flows.
+- Assignment-level representative appointment/replacement/revocation, enrolled-student eligibility, assignment-scoped group and membership actions, lecturer oversight, and immutable audit history.
 - Group members, task allocation, statuses, internal deadlines and overdue calculation.
 - Private group documents, supported extensions/size limits, uploader/version metadata, access-checked downloads and deletion.
 - Group discussion/messages and activity records.

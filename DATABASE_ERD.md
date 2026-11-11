@@ -14,6 +14,9 @@ erDiagram
     COURSE ||--o{ COURSE_ENROLMENT : includes
     USER ||--o{ COURSE_LECTURER : teaches
     COURSE ||--o{ COURSE_LECTURER : assigned_lecturers
+    ASSIGNMENT ||--o{ ASSIGNMENT_REPRESENTATIVE : designates
+    USER ||--o{ ASSIGNMENT_REPRESENTATIVE : represents
+    USER ||--o{ ASSIGNMENT_REPRESENTATIVE : appoints
     ACADEMIC_SESSION ||--o{ SEMESTER : contains
     SEMESTER ||--o{ COURSE : schedules
     USER o|--o{ COURSE : primary_lecturer
@@ -25,6 +28,10 @@ erDiagram
     ASSIGNMENT ||--o{ GROUP_MEMBERSHIP : scopes
     USER ||--o{ GROUP_MEMBERSHIP : joins
     USER o|--o{ GROUP_MEMBERSHIP : invites
+    ASSIGNMENT ||--o{ GROUP_MEMBERSHIP_EVENT : audits
+    GROUP o|--o{ GROUP_MEMBERSHIP_EVENT : context
+    USER o|--o{ GROUP_MEMBERSHIP_EVENT : actor
+    ASSIGNMENT_REPRESENTATIVE o|--o{ GROUP_MEMBERSHIP_EVENT : attribution
 
     GROUP ||--o{ TASK : contains
     USER ||--o{ TASK : primary_assignee
@@ -73,8 +80,10 @@ erDiagram
 | Course | `Course` |
 | Academic Semester | `Semester` (within `AcademicSession`) |
 | Assignment | `Assignment` |
+| Assignment Representative | `AssignmentClassRepresentative` |
 | Group | `Group` |
 | Group Membership | `GroupMembership` |
+| Group Membership Audit | `GroupMembershipEvent` |
 | Task | `Task` |
 | Task Assignment | `TaskAssignment` |
 | Internal Deadline | `InternalDeadline` |
@@ -97,6 +106,9 @@ erDiagram
 - A group belongs to one assignment; its course is derived through that assignment. Groups record their formation type, approval status, capacity, and optional student leader. Tasks belong to a group, so their assignment is likewise unambiguous.
 - `GroupMembership` stores its assignment, group, student, optional inviter, and membership status. Database constraints prevent duplicate group/student rows and multiple simultaneous group memberships for a student in one assignment; rejected records can be reused for a later request. Model validation checks course enrolment and reserves capacity for approved, pending, and invited members.
 - Students may propose groups and invite enrolled classmates when assignment settings allow it. Proposals and join requests remain pending until lecturer approval. Invited students can view the invitation/proposal shell, but rosters and collaboration content require approved membership (or authorized lecturer/admin access).
+- An `AssignmentClassRepresentative` appointment belongs to exactly one assignment and one student, records its appointing officer and closure metadata, and permits at most one active representative per assignment. Only a lecturer who manages the assignment or an administrator can appoint, replace, or revoke. The candidate must be active and enrolled in the assignment's course.
+- Representative authority is assignment-scoped and requires an active appointment plus current course enrolment. Representatives can create groups and perform permitted membership changes only within that assignment; they cannot edit assignment settings, approve/reject requests, dissolve groups, or grade. Lecturers retain those controls and can correct memberships and review the audit trail.
+- `GroupMembershipEvent` records the assignment, action, actor, optional representative appointment, affected student, status transition, group context, and immutable snapshots. New events capture snapshots available when saved. Additive migrations do not invent values for historical rows: absent actor-role/course snapshots stay blank in storage and render as “Not recorded.”
 - Tasks record priority, workflow status, creator, assignee, creation/update timestamps, and completion time. Their one-to-one `InternalDeadline` drives the automatically calculated overdue state; task updates and activity logs preserve progress/change history.
 - Task assignees are recorded in `TaskAssignment`; only approved members of that task's group are accepted through the model save path.
 - Group discussions are visible to approved members and authorized lecturers; a message may optionally reference a task in the same group.
@@ -110,5 +122,7 @@ erDiagram
 ## Migration and integration notes
 
 Migrations `0003`–`0006` add the normalized tables, copy existing profile details, task deadlines/assignees, files, course-semester links, and student activity, then remove redundant relationship columns. Migration `0007` adds assignment objectives while preserving existing assignments. Migration `0008` adds group capacity, leadership, formation type, assignment-scoped membership, invitations, and assignment-wide membership uniqueness; it backfills existing memberships and refuses to proceed if legacy duplicates need resolution. Migration `0011` randomizes storage paths for new group and contribution documents; existing file names remain unchanged. Migration `0012` allows discussion messages to reference a task in the same group. Existing submission and grade records retain their IDs; their assignment/group context is derived from the authoritative parent relationship. Migration `0004` is intentionally irreversible because it consolidates and removes legacy tables; restore the pre-migration database backup to roll back.
+
+Migrations `0023` and `0024` add representative closure details and audit-event snapshot/attribution fields and align optional event relations with model validation. They are additive and preserve existing audit rows. Historical snapshot columns are not backfilled from current users or courses because that would imply past roles or associations that were not recorded at event time.
 
 For future Moodle integration, keep Moodle identifiers in a separate mapping/integration layer, scoped by source system and external ID. Do not use Moodle IDs as SGAMS primary keys or couple the core schema to one LMS.

@@ -13,6 +13,7 @@
         <a class="btn btn-outline-light" href="{% url 'assignment_create' %}">New Assignment</a>
         <a class="btn btn-outline-light" href="{% url 'group_create' %}">New Group</a>
         <a class="btn btn-outline-light" href="{% url 'reports' %}">Reports</a>
+        <a class="btn btn-outline-light" href="{% url 'audit_dashboard' %}">Group Audit</a>
     </div>
     {% elif dashboard_role == "lecturer" %}
     <div class="portal-hero__actions d-flex flex-wrap gap-2">
@@ -21,6 +22,7 @@
         <a class="btn btn-outline-light" href="{% url 'group_list' %}">Monitor Groups</a>
         <a class="btn btn-outline-light" href="{% url 'submission_list' %}">Review Submissions</a>
         <a class="btn btn-outline-light" href="{% url 'reports' %}?type=contribution">Participation</a>
+        <a class="btn btn-outline-light" href="{% url 'audit_dashboard' %}">Group Audit</a>
     </div>
     {% else %}
     <div class="portal-hero__actions d-flex flex-wrap gap-2">

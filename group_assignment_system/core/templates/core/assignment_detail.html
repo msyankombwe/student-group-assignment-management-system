@@ -28,6 +28,59 @@
         </div>
     {% endif %}
 </div>
+{% if can_manage and representative_appointment %}
+    <section class="card shadow-sm mb-3" aria-labelledby="representative-appointment-heading">
+        <div class="card-body">
+            <h2 class="h5" id="representative-appointment-heading">Class Representative</h2>
+            <p class="mb-1">
+                {% if representative_appointment.student %}
+                    {{ representative_appointment.student.get_full_name|default:representative_appointment.student.username }}
+                {% else %}
+                    {{ representative_appointment.student_full_name_snapshot|default:representative_appointment.student_username_snapshot }}
+                {% endif %}
+                · {{ representative_appointment.student_number_snapshot|default:"Student ID Not Provided" }}
+                · {{ representative_appointment.get_status_display }}
+            </p>
+            <p class="small text-secondary mb-2">
+                Appointed by {{ representative_appointment.appointed_by_full_name_snapshot|default:representative_appointment.appointed_by_username_snapshot }}
+                · {{ representative_appointment.appointed_at }}
+                {% if representative_appointment.ended_at %}· ended {{ representative_appointment.ended_at }}{% endif %}
+            </p>
+            {% if representative_appointment.status == "active" %}
+                <form method="post" class="row g-2 align-items-end">
+                    {% csrf_token %}
+                    <div class="col-md-9">
+                        <label class="form-label" for="representative-revocation-reason">Reason for revocation</label>
+                        <input class="form-control" id="representative-revocation-reason" name="reason" maxlength="1000" required>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-outline-danger w-100" type="submit" name="revoke_representative" value="1">Revoke Appointment</button>
+                    </div>
+                </form>
+            {% endif %}
+        </div>
+    </section>
+{% endif %}
+{% if can_manage and representative_form %}
+    <section class="card shadow-sm mb-3" aria-labelledby="representative-management-heading">
+        <div class="card-body">
+            <h2 class="h5" id="representative-management-heading">Assignment Representative</h2>
+            <form method="post" class="row g-2 align-items-end">
+                {% csrf_token %}
+                <input type="hidden" name="appoint_representative" value="1">
+                <div class="col-md-9">
+                    {{ representative_form.student.label_tag }}
+                    {{ representative_form.student }}
+                    {% for error in representative_form.student.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                    {% for error in representative_form.non_field_errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-outline-primary w-100" type="submit">Appoint / Replace</button>
+                </div>
+            </form>
+        </div>
+    </section>
+{% endif %}
 <div class="row g-3">
     <div class="col-lg-8">
         <section class="card shadow-sm mb-3">

@@ -409,6 +409,7 @@ class AssignmentClassRepresentative(models.Model):
         default=STATUS_ACTIVE,
     )
     ended_at = models.DateTimeField(null=True, blank=True)
+    end_reason = models.TextField(blank=True)
     ended_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -416,6 +417,8 @@ class AssignmentClassRepresentative(models.Model):
         blank=True,
         related_name='representative_appointments_ended',
     )
+    ended_by_username_snapshot = models.CharField(max_length=150, blank=True)
+    ended_by_full_name_snapshot = models.CharField(max_length=255, blank=True)
     appointed_by_username_snapshot = models.CharField(max_length=150, blank=True)
     appointed_by_full_name_snapshot = models.CharField(max_length=255, blank=True)
 
@@ -491,22 +494,63 @@ class AssignmentClassRepresentative(models.Model):
 
         if not creating:
             existing = type(self).objects.filter(pk=self.pk).values(
+                'status',
                 'assignment_id',
                 'student_id',
                 'appointed_by_id',
+                'ended_by_id',
+                'ended_at',
+                'end_reason',
                 'student_username_snapshot',
                 'student_full_name_snapshot',
                 'student_number_snapshot',
                 'appointed_by_username_snapshot',
                 'appointed_by_full_name_snapshot',
+                'ended_by_username_snapshot',
+                'ended_by_full_name_snapshot',
             ).first()
-            if existing and any(
-                getattr(self, field) != value
-                for field, value in existing.items()
-            ):
-                raise ValidationError(
-                    'Appointment identity and history fields cannot be changed.'
+            if existing:
+                identity_fields = (
+                    'assignment_id',
+                    'student_id',
+                    'appointed_by_id',
+                    'student_username_snapshot',
+                    'student_full_name_snapshot',
+                    'student_number_snapshot',
+                    'appointed_by_username_snapshot',
+                    'appointed_by_full_name_snapshot',
                 )
+                if any(
+                    getattr(self, field) != existing[field]
+                    for field in identity_fields
+                ):
+                    raise ValidationError(
+                        'Appointment identity and history fields cannot be changed.'
+                    )
+                if existing['status'] != self.status:
+                    if (
+                        existing['status'] != self.STATUS_ACTIVE
+                        or self.status not in (
+                            self.STATUS_REPLACED,
+                            self.STATUS_REMOVED,
+                        )
+                    ):
+                        raise ValidationError(
+                            'A closed appointment cannot be changed or reactivated.'
+                        )
+                elif any(
+                    getattr(self, field) != existing[field]
+                    for field in (
+                        'ended_by_id',
+                        'ended_at',
+                        'end_reason',
+                        'ended_by_username_snapshot',
+                        'ended_by_full_name_snapshot',
+                    )
+                ):
+                    raise ValidationError(
+                        'Appointment end history cannot be changed after it is recorded.'
+                    )
 
         if self.status == self.STATUS_ACTIVE and self.ended_at is not None:
             raise ValidationError({
@@ -543,6 +587,11 @@ class AssignmentClassRepresentative(models.Model):
                 self.appointed_by_full_name_snapshot = (
                     self.appointed_by.get_full_name() or self.appointed_by.username
                 )
+        elif self.ended_by_id and not self.ended_by_username_snapshot:
+            self.ended_by_username_snapshot = self.ended_by.username
+            self.ended_by_full_name_snapshot = (
+                self.ended_by.get_full_name() or self.ended_by.username
+            )
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -760,6 +809,14 @@ class GroupMembershipEvent(models.Model):
     ACTION_TRANSFERRED = 'transferred'
     ACTION_REJECTED = 'rejected'
     ACTION_INVITED = 'invited'
+    ACTION_INVITATION_ACCEPTED = 'invitation_accepted'
+    ACTION_INVITATION_DECLINED = 'invitation_declined'
+    ACTION_GROUP_CREATED = 'group_created'
+    ACTION_GROUP_UPDATED = 'group_updated'
+    ACTION_GROUP_ARCHIVED = 'group_archived'
+    ACTION_REPRESENTATIVE_APPOINTED = 'rep_appointed'
+    ACTION_REPRESENTATIVE_REPLACED = 'rep_replaced'
+    ACTION_REPRESENTATIVE_REVOKED = 'rep_revoked'
     ACTION_CHOICES = [
         (ACTION_ADDED, 'Added'),
         (ACTION_APPROVED, 'Approved'),
@@ -767,6 +824,14 @@ class GroupMembershipEvent(models.Model):
         (ACTION_TRANSFERRED, 'Transferred'),
         (ACTION_REJECTED, 'Rejected'),
         (ACTION_INVITED, 'Invited'),
+        (ACTION_INVITATION_ACCEPTED, 'Invitation accepted'),
+        (ACTION_INVITATION_DECLINED, 'Invitation declined'),
+        (ACTION_GROUP_CREATED, 'Group created'),
+        (ACTION_GROUP_UPDATED, 'Group updated'),
+        (ACTION_GROUP_ARCHIVED, 'Group archived'),
+        (ACTION_REPRESENTATIVE_APPOINTED, 'Representative appointed'),
+        (ACTION_REPRESENTATIVE_REPLACED, 'Representative replaced'),
+        (ACTION_REPRESENTATIVE_REVOKED, 'Representative revoked'),
     ]
 
     assignment = models.ForeignKey(
@@ -779,6 +844,7 @@ class GroupMembershipEvent(models.Model):
         Group,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name='membership_events',
     )
     previous_group = models.ForeignKey(
@@ -792,16 +858,46 @@ class GroupMembershipEvent(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name='group_membership_events',
     )
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name='group_membership_events_performed',
     )
-    action = models.CharField(max_length=12, choices=ACTION_CHOICES)
+    actor_appointment = models.ForeignKey(
+        AssignmentClassRepresentative,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='performed_membership_events',
+    )
+    representative_appointment = models.ForeignKey(
+        AssignmentClassRepresentative,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_events',
+    )
+    action = models.CharField(max_length=24, choices=ACTION_CHOICES)
     occurred_at = models.DateTimeField(auto_now_add=True)
+    previous_status = models.CharField(
+        max_length=20,
+        choices=GroupMembership.STATUS_CHOICES,
+        blank=True,
+    )
+    new_status = models.CharField(
+        max_length=20,
+        choices=GroupMembership.STATUS_CHOICES,
+        blank=True,
+    )
+    reason = models.TextField(blank=True)
+    actor_role_snapshot = models.CharField(max_length=20, choices=User.ROLE_CHOICES, blank=True)
+    course_code_snapshot = models.CharField(max_length=50, blank=True)
+    course_name_snapshot = models.CharField(max_length=200, blank=True)
     assignment_title_snapshot = models.CharField(max_length=200, blank=True)
     group_name_snapshot = models.CharField(max_length=100, blank=True)
     previous_group_name_snapshot = models.CharField(max_length=100, blank=True)
@@ -816,6 +912,9 @@ class GroupMembershipEvent(models.Model):
         indexes = [
             models.Index(fields=['assignment', 'occurred_at']),
             models.Index(fields=['group', 'occurred_at']),
+            models.Index(fields=['action', 'occurred_at']),
+            models.Index(fields=['actor_role_snapshot', 'occurred_at']),
+            models.Index(fields=['actor_appointment', 'occurred_at']),
         ]
 
     objects = GroupMembershipEventQuerySet.as_manager()
@@ -832,20 +931,49 @@ class GroupMembershipEvent(models.Model):
         actor = User.objects.filter(pk=self.actor_id).first()
         if assignment is None:
             raise ValidationError({'assignment': 'A valid assignment is required for an event.'})
-        if group is None:
-            raise ValidationError({'group': 'A valid group is required for an event.'})
-        if student is None:
+        groupless_actions = {
+            self.ACTION_REPRESENTATIVE_APPOINTED,
+            self.ACTION_REPRESENTATIVE_REPLACED,
+            self.ACTION_REPRESENTATIVE_REVOKED,
+        }
+        studentless_actions = {
+            self.ACTION_GROUP_CREATED,
+            self.ACTION_GROUP_UPDATED,
+            self.ACTION_GROUP_ARCHIVED,
+        }
+        if group is None and self.action not in groupless_actions:
+            raise ValidationError({'group': 'A valid group is required for this event.'})
+        if student is None and self.action not in studentless_actions:
             raise ValidationError({'student': 'A valid student is required for an event.'})
-        if actor is None:
+        if actor is None and not (
+            self.action == self.ACTION_REPRESENTATIVE_REVOKED
+            and self.reason.startswith('Automatically ended because')
+        ):
             raise ValidationError({'actor': 'A valid actor is required for an event.'})
         if (
             self.assignment_id
             and self.group_id
+            and group
             and group.assignment_id != self.assignment_id
         ):
             raise ValidationError('The event assignment must match its group.')
         if self.action not in dict(self.ACTION_CHOICES):
             raise ValidationError({'action': 'Select a valid membership action.'})
+        appointment_actions = {
+            self.ACTION_REPRESENTATIVE_APPOINTED,
+            self.ACTION_REPRESENTATIVE_REPLACED,
+            self.ACTION_REPRESENTATIVE_REVOKED,
+        }
+        if self.action in appointment_actions:
+            appointment = AssignmentClassRepresentative.objects.filter(
+                pk=self.representative_appointment_id,
+            ).first()
+            if appointment is None or appointment.assignment_id != self.assignment_id:
+                raise ValidationError({
+                    'representative_appointment': (
+                        'Representative events must refer to an appointment for this assignment.'
+                    )
+                })
         if self.action == self.ACTION_TRANSFERRED:
             if not self.previous_group_id:
                 raise ValidationError({
@@ -864,11 +992,12 @@ class GroupMembershipEvent(models.Model):
             raise ValidationError({
                 'previous_group': 'Only transfer events can record a previous group.'
             })
-        if student.role != User.ROLE_STUDENT:
+        if student and student.role != User.ROLE_STUDENT:
             raise ValidationError('Membership events must refer to a student.')
-        if self.action not in (
+        if student and self.action not in (
             self.ACTION_REMOVED,
             self.ACTION_REJECTED,
+            self.ACTION_INVITATION_DECLINED,
         ) and not CourseEnrolment.objects.filter(
             course_id=self.assignment.course_id,
             student_id=self.student_id,
@@ -882,20 +1011,38 @@ class GroupMembershipEvent(models.Model):
         self.assignment_title_snapshot = Assignment.objects.get(
             pk=self.assignment_id
         ).title
-        self.group_name_snapshot = Group.objects.get(pk=self.group_id).name
+        assignment = Assignment.objects.select_related('course').get(
+            pk=self.assignment_id,
+        )
+        self.course_code_snapshot = assignment.course.code
+        self.course_name_snapshot = assignment.course.name
+        if self.group_id:
+            self.group_name_snapshot = Group.objects.get(pk=self.group_id).name
         if self.previous_group_id:
             self.previous_group_name_snapshot = Group.objects.get(
                 pk=self.previous_group_id
             ).name
-        student = User.objects.get(pk=self.student_id)
-        actor = User.objects.get(pk=self.actor_id)
-        self.student_username_snapshot = student.username
-        self.student_full_name_snapshot = (
-            student.get_full_name() or student.username
-        )
-        self.student_number_snapshot = student.student_number
-        self.actor_username_snapshot = actor.username
-        self.actor_full_name_snapshot = actor.get_full_name() or actor.username
+        if self.student_id:
+            student = User.objects.get(pk=self.student_id)
+            self.student_username_snapshot = student.username
+            self.student_full_name_snapshot = (
+                student.get_full_name() or student.username
+            )
+            self.student_number_snapshot = student.student_number
+        if self.actor_id:
+            actor = User.objects.get(pk=self.actor_id)
+            self.actor_username_snapshot = actor.username
+            self.actor_full_name_snapshot = actor.get_full_name() or actor.username
+            self.actor_role_snapshot = (
+                User.ROLE_ADMIN if actor.is_superuser else actor.role
+            )
+            self.actor_appointment = AssignmentClassRepresentative.objects.filter(
+                assignment_id=self.assignment_id,
+                student_id=actor.pk,
+                status=AssignmentClassRepresentative.STATUS_ACTIVE,
+            ).first()
+        else:
+            self.actor_role_snapshot = ''
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

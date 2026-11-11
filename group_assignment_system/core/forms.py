@@ -5,9 +5,11 @@ from django.utils import timezone
 
 from .models import (
     Assignment,
+    AssignmentClassRepresentative,
     Course,
     Group,
     GroupMembership,
+    GroupMembershipEvent,
     GroupMessage,
     PeerReview,
     Submission,
@@ -287,6 +289,133 @@ class GroupUpdateForm(forms.ModelForm):
         if max_members < self.group.reserved_member_count():
             raise ValidationError('Capacity cannot be lower than the current members and invitations.')
         return max_members
+
+
+class AssignmentRepresentativeForm(forms.Form):
+    student = forms.ModelChoiceField(
+        queryset=User.objects.none(),
+        label='Assignment representative',
+    )
+
+    def __init__(
+        self,
+        *args,
+        assignment=None,
+        current_student_id=None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        if assignment:
+            students = User.objects.filter(
+                role=User.ROLE_STUDENT,
+                is_active=True,
+                course_enrolments__course=assignment.course,
+            )
+            if current_student_id:
+                students = students.exclude(pk=current_student_id)
+            self.fields['student'].queryset = students.distinct().order_by(
+                'last_name',
+                'first_name',
+                'username',
+            )
+        self.fields['student'].widget.attrs.setdefault('class', 'form-select')
+        self.fields['student'].label_from_instance = self.student_label
+
+    @staticmethod
+    def student_label(student):
+        student_id = student.student_number or 'Student ID Not Provided'
+        full_name = student.get_full_name() or student.username
+        return f'{student_id} — {full_name}'
+
+
+class GroupAuditFilterForm(forms.Form):
+    course = forms.ModelChoiceField(
+        queryset=Course.objects.none(),
+        required=False,
+        empty_label='All courses',
+    )
+    assignment = forms.ModelChoiceField(
+        queryset=Assignment.objects.none(),
+        required=False,
+        empty_label='All assignments',
+    )
+    group = forms.ModelChoiceField(
+        queryset=Group.objects.none(),
+        required=False,
+        empty_label='All groups',
+    )
+    student_id = forms.CharField(required=False, max_length=50)
+    student_name = forms.CharField(required=False, max_length=255)
+    representative = forms.ModelChoiceField(
+        queryset=AssignmentClassRepresentative.objects.none(),
+        required=False,
+        empty_label='All representatives',
+    )
+    actor = forms.ModelChoiceField(
+        queryset=User.objects.none(),
+        required=False,
+        empty_label='All users',
+    )
+    actor_role = forms.ChoiceField(
+        required=False,
+        choices=(
+            ('', 'All actor roles'),
+            (User.ROLE_STUDENT, 'Student / representative'),
+            (User.ROLE_LECTURER, 'Lecturer'),
+            (User.ROLE_ADMIN, 'Administrator'),
+        ),
+    )
+    action = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All actions'), *GroupMembershipEvent.ACTION_CHOICES],
+    )
+
+    membership_status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All membership statuses'), *GroupMembership.STATUS_CHOICES],
+    )
+
+    date_from = forms.DateField(
+        required=False,
+        input_formats=('%Y-%m-%d',),
+        widget=forms.DateInput(attrs={'type': 'date'}),
+    )
+    date_to = forms.DateField(
+        required=False,
+        input_formats=('%Y-%m-%d',),
+        widget=forms.DateInput(attrs={'type': 'date'}),
+    )
+
+    def __init__(
+        self,
+        *args,
+        courses=None,
+        assignments=None,
+        groups=None,
+        representatives=None,
+        actors=None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.fields['course'].queryset = courses or Course.objects.none()
+        self.fields['assignment'].queryset = assignments or Assignment.objects.none()
+        self.fields['group'].queryset = groups or Group.objects.none()
+        self.fields['representative'].queryset = (
+            representatives or AssignmentClassRepresentative.objects.none()
+        )
+        self.fields['actor'].queryset = actors or User.objects.none()
+        for field in self.fields.values():
+            field.widget.attrs.setdefault('class', 'form-select')
+        for name in ('student_id', 'student_name'):
+            self.fields[name].widget.attrs['class'] = 'form-control'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        date_from = cleaned_data.get('date_from')
+        date_to = cleaned_data.get('date_to')
+        if date_from and date_to and date_from > date_to:
+            self.add_error('date_to', 'The end date must be on or after the start date.')
+        return cleaned_data
 
 
 class GroupProposalForm(forms.Form):

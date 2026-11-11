@@ -9,7 +9,7 @@ from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, F, Max, OuterRef, Prefetch, Q
 from django.middleware.csrf import get_token
-from django.http import FileResponse, HttpResponse, JsonResponse
+from django.http import FileResponse, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.text import get_valid_filename
@@ -24,9 +24,11 @@ from rest_framework.response import Response
 
 from .forms import (
     AssignmentForm,
+    AssignmentRepresentativeForm,
     CourseForm,
     EvidenceUploadForm,
     GradeForm,
+    GroupAuditFilterForm,
     GroupDocumentUploadForm,
     GroupForm,
     GroupInvitationForm,
@@ -43,6 +45,7 @@ from .forms import (
 from .models import (
     ActivityLog,
     Assignment,
+    AssignmentClassRepresentative,
     AuditLog,
     Course,
     CourseEnrolment,
@@ -79,9 +82,12 @@ from .services import (
     can_manage_academic,
     create_assignment_group,
     dissolve_assignment_group,
+    appoint_assignment_class_representative,
     log_audit,
     notify,
+    record_group_membership_event,
     record_activity,
+    revoke_assignment_class_representative,
     user_can_access_group,
     user_can_access_group_content,
     user_can_manage_assignment_groups,
@@ -221,13 +227,25 @@ class AdminActivityAPIView(APIView):
         ])
 
 
-def _record_group_membership_event(actor, membership, action):
-    return GroupMembershipEvent.objects.create(
+def _record_group_membership_event(
+    actor,
+    membership,
+    action,
+    previous_status='',
+    new_status=None,
+    previous_group=None,
+    reason='',
+):
+    return record_group_membership_event(
+        actor=actor,
         assignment=membership.assignment,
         group=membership.group,
         student=membership.student,
-        actor=actor,
         action=action,
+        previous_status=previous_status,
+        new_status=membership.status if new_status is None else new_status,
+        previous_group=previous_group,
+        reason=reason,
     )
 
 
@@ -244,6 +262,7 @@ def _set_group_membership(group, student, status, actor, invited_by=None):
             group=group,
             student=student,
         )
+    previous_status = membership.status if membership.pk else ''
     membership.group = group
     membership.status = status
     membership.invited_by = invited_by
@@ -253,7 +272,12 @@ def _set_group_membership(group, student, status, actor, invited_by=None):
         if status == GroupMembership.STATUS_INVITED
         else GroupMembershipEvent.ACTION_ADDED
     )
-    _record_group_membership_event(actor, membership, action)
+    _record_group_membership_event(
+        actor,
+        membership,
+        action,
+        previous_status=previous_status,
+    )
     return membership
 
 
@@ -927,6 +951,276 @@ def contribution_report(request):
     })
 
 
+@login_required
+def audit_dashboard(request):
+    user = request.user
+    if user.is_admin_role() or user.is_superuser:
+        courses = Course.objects.all()
+    elif user.is_lecturer():
+        courses = _managed_courses_for(user)
+    else:
+        return _forbidden(request)
+
+    assignments = Assignment.objects.filter(course__in=courses).select_related(
+        'course',
+    ).distinct()
+    groups = Group.objects.filter(assignment__in=assignments).select_related(
+        'assignment__course',
+    )
+    representatives = AssignmentClassRepresentative.objects.filter(
+        assignment__in=assignments,
+    ).select_related('student', 'assignment__course')
+    events = GroupMembershipEvent.objects.filter(
+        assignment__in=assignments,
+    ).select_related(
+        'assignment__course',
+        'group',
+        'previous_group',
+        'actor',
+        'student',
+        'actor_appointment',
+        'representative_appointment',
+    ).order_by('-occurred_at', '-pk')
+    actors = User.objects.filter(
+        pk__in=events.exclude(actor_id=None).values('actor_id'),
+    ).order_by('last_name', 'first_name', 'username')
+    form = GroupAuditFilterForm(
+        request.GET if request.GET else None,
+        courses=courses,
+        assignments=assignments,
+        groups=groups,
+        representatives=representatives,
+        actors=actors,
+    )
+    if form.is_bound and not form.is_valid() and request.GET.get('format') == 'csv':
+        return HttpResponse('Invalid audit filters.', status=400)
+
+    cleaned = form.cleaned_data if form.is_valid() else {}
+    if cleaned.get('course'):
+        events = events.filter(assignment__course=cleaned['course'])
+    if cleaned.get('assignment'):
+        events = events.filter(assignment=cleaned['assignment'])
+    if cleaned.get('group'):
+        events = events.filter(
+            Q(group=cleaned['group']) | Q(previous_group=cleaned['group'])
+        )
+    if cleaned.get('student_id'):
+        events = events.filter(
+            student_number_snapshot__icontains=cleaned['student_id'].strip(),
+        )
+    if cleaned.get('student_name'):
+        events = events.filter(
+            student_full_name_snapshot__icontains=cleaned['student_name'].strip(),
+        )
+    if cleaned.get('representative'):
+        events = events.filter(
+            Q(actor_appointment=cleaned['representative'])
+            | Q(representative_appointment=cleaned['representative'])
+        )
+    if cleaned.get('actor'):
+        events = events.filter(actor=cleaned['actor'])
+    if cleaned.get('actor_role'):
+        events = events.filter(actor_role_snapshot=cleaned['actor_role'])
+    if cleaned.get('action'):
+        events = events.filter(action=cleaned['action'])
+    if cleaned.get('membership_status'):
+        events = events.filter(
+            Q(previous_status=cleaned['membership_status'])
+            | Q(new_status=cleaned['membership_status'])
+        )
+    if cleaned.get('date_from'):
+        events = events.filter(occurred_at__date__gte=cleaned['date_from'])
+    if cleaned.get('date_to'):
+        events = events.filter(occurred_at__date__lte=cleaned['date_to'])
+
+    if request.GET.get('format') == 'csv':
+        class Echo:
+            def write(self, value):
+                return value
+
+        writer = csv.writer(Echo())
+
+        def audit_csv_rows():
+            yield writer.writerow([
+                'Assignment',
+                'Course',
+                'Group',
+                'Actor',
+                'Actor role',
+                'Affected student',
+                'Student ID',
+                'Action',
+                'Previous status',
+                'New status',
+                'Previous group',
+                'Destination group',
+                'Date and time',
+                'Reason',
+            ])
+            for event in events.iterator(chunk_size=500):
+                no_student_actions = {
+                    GroupMembershipEvent.ACTION_GROUP_CREATED,
+                    GroupMembershipEvent.ACTION_GROUP_UPDATED,
+                    GroupMembershipEvent.ACTION_GROUP_ARCHIVED,
+                }
+                no_membership_status_actions = no_student_actions | {
+                    GroupMembershipEvent.ACTION_REPRESENTATIVE_APPOINTED,
+                    GroupMembershipEvent.ACTION_REPRESENTATIVE_REPLACED,
+                    GroupMembershipEvent.ACTION_REPRESENTATIVE_REVOKED,
+                }
+                row = (
+                    event.assignment_title_snapshot or 'Not recorded',
+                    event.course_code_snapshot or event.course_name_snapshot or 'Not recorded',
+                    event.group_name_snapshot or 'Not recorded',
+                    event.actor_full_name_snapshot or event.actor_username_snapshot or 'Not recorded',
+                    event.actor_role_snapshot or 'Not recorded',
+                    event.student_full_name_snapshot or event.student_username_snapshot or (
+                        '—' if event.action in no_student_actions else 'Not recorded'
+                    ),
+                    event.student_number_snapshot or (
+                        '—' if event.action in no_student_actions else 'Not recorded'
+                    ),
+                    event.get_action_display(),
+                    event.get_previous_status_display() if event.previous_status else (
+                        '—' if event.action in no_membership_status_actions else 'Not recorded'
+                    ),
+                    event.get_new_status_display() if event.new_status else (
+                        '—' if event.action in no_membership_status_actions else 'Not recorded'
+                    ),
+                    (
+                        event.previous_group_name_snapshot
+                        or (
+                            event.group_name_snapshot
+                            if event.action == GroupMembershipEvent.ACTION_REMOVED
+                            else '—'
+                            if event.action != GroupMembershipEvent.ACTION_TRANSFERRED
+                            else 'Not recorded'
+                        )
+                    ),
+                    (
+                        event.group_name_snapshot
+                        if event.action in (
+                            GroupMembershipEvent.ACTION_ADDED,
+                            GroupMembershipEvent.ACTION_APPROVED,
+                            GroupMembershipEvent.ACTION_TRANSFERRED,
+                            GroupMembershipEvent.ACTION_INVITED,
+                            GroupMembershipEvent.ACTION_INVITATION_ACCEPTED,
+                        )
+                        else '—'
+                        if event.action in no_membership_status_actions
+                        else 'Not recorded'
+                    ),
+                    event.occurred_at.isoformat(),
+                    event.reason or 'Not recorded',
+                )
+                yield writer.writerow([
+                    _spreadsheet_safe_cell(value) for value in row
+                ])
+
+        response = StreamingHttpResponse(
+            audit_csv_rows(),
+            content_type='text/csv; charset=utf-8',
+        )
+        response['Content-Disposition'] = 'attachment; filename="group-audit.csv"'
+        return response
+
+    action_counts = dict(
+        events.order_by().values('action').annotate(total=Count('pk')).values_list(
+            'action',
+            'total',
+        )
+    )
+    representative_interventions = events.filter(
+        actor_appointment__isnull=False,
+    ).count()
+    lecturer_interventions = events.filter(
+        actor_role_snapshot=User.ROLE_LECTURER,
+    ).count()
+    administrator_interventions = events.filter(
+        actor_role_snapshot=User.ROLE_ADMIN,
+    ).count()
+
+    representative_activity = {}
+    for row in events.filter(
+        actor_appointment__isnull=False,
+    ).order_by().values(
+        'actor_appointment_id',
+        'action',
+    ).annotate(total=Count('pk')):
+        representative_activity.setdefault(
+            row['actor_appointment_id'],
+            {},
+        )[row['action']] = row['total']
+    representative_last_activity = dict(
+        events.filter(
+            actor_appointment__isnull=False,
+        ).order_by().values('actor_appointment_id').annotate(
+            last_activity=Max('occurred_at'),
+        ).values_list('actor_appointment_id', 'last_activity')
+    )
+    appointment_rows = []
+    selected_course = cleaned.get('course')
+    selected_assignment = cleaned.get('assignment')
+    selected_representative = cleaned.get('representative')
+    if selected_course:
+        representatives = representatives.filter(
+            assignment__course=selected_course,
+        )
+    if selected_assignment:
+        representatives = representatives.filter(assignment=selected_assignment)
+    if selected_representative:
+        representatives = representatives.filter(pk=selected_representative.pk)
+    representative_page = Paginator(
+        representatives.order_by(
+            'assignment__course__code',
+            'assignment__title',
+            '-appointed_at',
+        ),
+        50,
+    ).get_page(request.GET.get('representative_page'))
+    for appointment in representative_page.object_list:
+        actions = representative_activity.get(appointment.pk, {})
+        appointment_rows.append({
+            'appointment': appointment,
+            'groups_created': actions.get(
+                GroupMembershipEvent.ACTION_GROUP_CREATED,
+                0,
+            ),
+            'students_allocated': actions.get(GroupMembershipEvent.ACTION_ADDED, 0),
+            'students_removed': actions.get(GroupMembershipEvent.ACTION_REMOVED, 0),
+            'transfers': actions.get(GroupMembershipEvent.ACTION_TRANSFERRED, 0),
+            'last_activity': representative_last_activity.get(appointment.pk),
+        })
+
+    staff_events = events.filter(
+        actor_role_snapshot__in=(User.ROLE_LECTURER, User.ROLE_ADMIN),
+    )
+    page_obj = Paginator(events, 50).get_page(request.GET.get('page'))
+    staff_page_obj = Paginator(staff_events, 50).get_page(
+        request.GET.get('staff_page'),
+    )
+    filter_query = request.GET.copy()
+    filter_query.pop('page', None)
+    filter_query.pop('staff_page', None)
+    filter_query.pop('representative_page', None)
+    filter_query.pop('format', None)
+    return render(request, 'core/audit_dashboard.html', {
+        'form': form,
+        'page_obj': page_obj,
+        'events': page_obj.object_list,
+        'action_counts': action_counts,
+        'representative_interventions': representative_interventions,
+        'lecturer_interventions': lecturer_interventions,
+        'administrator_interventions': administrator_interventions,
+        'representative_activity': appointment_rows,
+        'staff_events': staff_page_obj.object_list,
+        'staff_page_obj': staff_page_obj,
+        'representative_page': representative_page,
+        'csv_query': filter_query.urlencode(),
+        'can_export': user.is_admin_role() or user.is_superuser or user.is_lecturer(),
+    })
+
+
 def _dashboard_stats(user):
     if user.is_admin_role() or user.is_superuser:
         return {
@@ -1262,6 +1556,33 @@ def assignment_detail(request, pk):
         and user_can_manage_assignment_groups(user, assignment)
     )
     representative_access = can_create_groups and user.is_student()
+    representative_appointment = (
+        assignment.representative_appointments.select_related(
+            'student',
+            'appointed_by',
+            'ended_by',
+        ).order_by('-appointed_at').first()
+        if manages
+        else None
+    )
+    representative_form = None
+    if (
+        manages
+        and assignment.assignment_type == Assignment.TYPE_GROUP
+        and assignment.status != Assignment.STATUS_CLOSED
+        and assignment.course.is_active
+    ):
+        current_representative_id = (
+            representative_appointment.student_id
+            if representative_appointment
+            and representative_appointment.status == AssignmentClassRepresentative.STATUS_ACTIVE
+            else None
+        )
+        representative_form = AssignmentRepresentativeForm(
+            request.POST if request.method == 'POST' and 'appoint_representative' in request.POST else None,
+            assignment=assignment,
+            current_student_id=current_representative_id,
+        )
     enrolled = assignment.course.enrolments.filter(student=user).exists()
     is_group_member = GroupMembership.objects.filter(
         group__assignment=assignment,
@@ -1278,6 +1599,91 @@ def assignment_detail(request, pk):
 
     proposal_form = None
     if request.method == 'POST':
+        if 'appoint_representative' in request.POST:
+            if (
+                not manages
+                or assignment.assignment_type != Assignment.TYPE_GROUP
+                or assignment.status == Assignment.STATUS_CLOSED
+                or not assignment.course.is_active
+            ):
+                return _forbidden(request)
+            representative_form = AssignmentRepresentativeForm(
+                request.POST,
+                assignment=assignment,
+                current_student_id=(
+                    representative_appointment.student_id
+                    if representative_appointment
+                    and representative_appointment.status == AssignmentClassRepresentative.STATUS_ACTIVE
+                    else None
+                ),
+            )
+            if representative_form.is_valid():
+                try:
+                    appointment = appoint_assignment_class_representative(
+                        request.user,
+                        assignment,
+                        representative_form.cleaned_data['student'],
+                    )
+                except ValidationError as error:
+                    representative_form.add_error(None, error)
+                else:
+                    log_audit(
+                        request.user,
+                        f'Appointed {appointment.student.username} as class representative for {assignment.title}',
+                    )
+                    record_activity(
+                        request.user,
+                        'representative_appointed',
+                        f'Appointed {appointment.student.username} as class representative for {assignment.title}',
+                        assignment=assignment,
+                    )
+                    messages.success(request, 'Class representative appointed.')
+                    return redirect('assignment_detail', assignment.pk)
+            return render(request, 'core/assignment_detail.html', {
+                'assignment': assignment,
+                'groups': assignment.groups.select_related('leader').prefetch_related(
+                    'memberships__student',
+                    'tasks',
+                ).order_by('name'),
+                'own_memberships': GroupMembership.objects.filter(
+                    group__assignment=assignment,
+                    student=user,
+                ).exclude(status=GroupMembership.STATUS_REJECTED).select_related('group'),
+                'available_groups': assignment.groups.filter(status=Group.STATUS_ACTIVE).order_by('name'),
+                'existing_membership': None,
+                'can_propose_group': False,
+                'proposal_form': None,
+                'can_manage': manages,
+                'representative_appointment': representative_appointment,
+                'representative_form': representative_form,
+                'can_create_groups': can_create_groups,
+                'can_view_group_formation': manages or representative_access,
+                'show_assignment_content': manages or assignment.is_published(),
+            })
+        if 'revoke_representative' in request.POST:
+            if not manages or not representative_appointment:
+                return _forbidden(request)
+            try:
+                revoke_assignment_class_representative(
+                    request.user,
+                    representative_appointment.pk,
+                    request.POST.get('reason', ''),
+                )
+            except ValidationError as error:
+                messages.error(request, '; '.join(error.messages))
+            else:
+                log_audit(
+                    request.user,
+                    f'Revoked class representative for {assignment.title}',
+                )
+                record_activity(
+                    request.user,
+                    'representative_revoked',
+                    f'Revoked the class representative for {assignment.title}',
+                    assignment=assignment,
+                )
+                messages.success(request, 'Class representative appointment revoked.')
+            return redirect('assignment_detail', assignment.pk)
         if not request.user.is_student() or not enrolled:
             return _forbidden(request)
         if not assignment.course.is_active or not assignment.is_published():
@@ -1306,11 +1712,21 @@ def assignment_detail(request, pk):
                         formation_type=Group.FORMATION_STUDENT,
                         status=Group.STATUS_PENDING,
                     )
+                    record_group_membership_event(
+                        actor=request.user,
+                        assignment=assignment,
+                        group=group,
+                        action=GroupMembershipEvent.ACTION_GROUP_CREATED,
+                        reason='Student-proposed group awaiting staff approval.',
+                    )
                     membership = GroupMembership.objects.filter(
                         assignment=assignment,
                         student=request.user,
                         status=GroupMembership.STATUS_REJECTED,
                     ).first()
+                    previous_status = (
+                        membership.status if membership is not None else ''
+                    )
                     if membership:
                         membership.group = group
                         membership.status = GroupMembership.STATUS_PENDING
@@ -1327,6 +1743,7 @@ def assignment_detail(request, pk):
                         request.user,
                         membership,
                         GroupMembershipEvent.ACTION_ADDED,
+                        previous_status=previous_status,
                     )
                     group.leader = request.user
                     group.save()
@@ -1455,6 +1872,8 @@ def assignment_detail(request, pk):
         'can_propose_group': can_propose_group,
         'proposal_form': proposal_form,
         'can_manage': manages,
+        'representative_appointment': representative_appointment,
+        'representative_form': representative_form,
         'can_create_groups': can_create_groups,
         'can_view_group_formation': manages or representative_access,
         'show_assignment_content': manages or assignment.is_published(),
@@ -1733,15 +2152,25 @@ def group_detail(request, pk):
                 group=group,
             )
             if group_form.is_valid():
-                updated_group = group_form.save()
-                log_audit(request.user, f'Updated group {group.name}')
-                record_activity(
-                    request.user,
-                    'group_updated',
-                    f'Updated group {group.name}',
-                    assignment=group.assignment,
-                    group=group,
-                )
+                changed_fields = ', '.join(group_form.changed_data)
+                with transaction.atomic():
+                    updated_group = group_form.save()
+                    if changed_fields:
+                        record_group_membership_event(
+                            actor=request.user,
+                            assignment=group.assignment,
+                            group=group,
+                            action=GroupMembershipEvent.ACTION_GROUP_UPDATED,
+                            reason=f'Updated group fields: {changed_fields}.',
+                        )
+                    log_audit(request.user, f'Updated group {group.name}')
+                    record_activity(
+                        request.user,
+                        'group_updated',
+                        f'Updated group {group.name}',
+                        assignment=group.assignment,
+                        group=group,
+                    )
                 messages.success(request, 'Group details updated.')
                 return redirect('group_detail', updated_group.pk)
         elif 'approve_group' in request.POST:
@@ -1755,12 +2184,14 @@ def group_detail(request, pk):
                     status=GroupMembership.STATUS_PENDING
                 )
                 for membership in pending_members:
+                    previous_status = membership.status
                     membership.status = GroupMembership.STATUS_APPROVED
                     membership.save()
                     _record_group_membership_event(
                         request.user,
                         membership,
                         GroupMembershipEvent.ACTION_APPROVED,
+                        previous_status=previous_status,
                     )
                     notify(
                         membership.student,
@@ -1799,6 +2230,10 @@ def group_detail(request, pk):
                         GroupMembership.STATUS_INVITED,
                     )
                 ).select_related('student'))
+                previous_statuses = {
+                    membership.pk: membership.status
+                    for membership in pending_members
+                }
                 group.memberships.filter(
                     pk__in=[membership.pk for membership in pending_members]
                 ).update(status=GroupMembership.STATUS_REJECTED)
@@ -1807,6 +2242,7 @@ def group_detail(request, pk):
                         request.user,
                         membership,
                         GroupMembershipEvent.ACTION_REJECTED,
+                        previous_status=previous_statuses[membership.pk],
                     )
                     notify(
                         membership.student,
@@ -1828,12 +2264,14 @@ def group_detail(request, pk):
                     group=group,
                     status=GroupMembership.STATUS_PENDING,
                 )
+                previous_status = membership.status
                 membership.status = GroupMembership.STATUS_APPROVED
                 membership.save()
                 _record_group_membership_event(
                     request.user,
                     membership,
                     GroupMembershipEvent.ACTION_APPROVED,
+                    previous_status=previous_status,
                 )
                 if not group.leader_id:
                     group.leader = membership.student
@@ -1861,12 +2299,14 @@ def group_detail(request, pk):
                 ),
             )
             with transaction.atomic():
+                previous_status = membership.status
                 membership.status = GroupMembership.STATUS_REJECTED
                 membership.save()
                 _record_group_membership_event(
                     request.user,
                     membership,
                     GroupMembershipEvent.ACTION_REJECTED,
+                    previous_status=previous_status,
                 )
             notify(
                 membership.student,
@@ -1917,7 +2357,11 @@ def group_detail(request, pk):
             if not can_manage or request.user.is_student():
                 return _forbidden(request)
             try:
-                group = dissolve_assignment_group(request.user, group.pk)
+                group = dissolve_assignment_group(
+                    request.user,
+                    group.pk,
+                    request.POST.get('archive_reason', ''),
+                )
             except ValidationError as error:
                 messages.error(request, '; '.join(error.messages))
             else:
@@ -1946,6 +2390,7 @@ def group_detail(request, pk):
                     group=group,
                     status=GroupMembership.STATUS_APPROVED,
                 )
+                previous_status = membership.status
                 removed_student = membership.student
                 if group.leader_id == removed_student.pk:
                     next_leader = group.memberships.filter(
@@ -1957,6 +2402,7 @@ def group_detail(request, pk):
                     request.user,
                     membership,
                     GroupMembershipEvent.ACTION_REMOVED,
+                    previous_status=previous_status,
                 )
                 membership.delete()
             notify(
@@ -2019,13 +2465,15 @@ def group_detail(request, pk):
                 own_membership = GroupMembership.objects.select_for_update().get(
                     pk=own_membership.pk,
                 )
+                previous_status = own_membership.status
                 own_membership.status = GroupMembership.STATUS_PENDING
                 own_membership.invited_by = None
                 own_membership.save()
                 _record_group_membership_event(
                     request.user,
                     own_membership,
-                    GroupMembershipEvent.ACTION_ADDED,
+                    GroupMembershipEvent.ACTION_INVITATION_ACCEPTED,
+                    previous_status=previous_status,
                 )
             if group.assignment.course.lecturer:
                 notify(
@@ -2039,12 +2487,14 @@ def group_detail(request, pk):
             if not own_membership or own_membership.status != GroupMembership.STATUS_INVITED:
                 return _forbidden(request)
             with transaction.atomic():
+                previous_status = own_membership.status
                 own_membership.status = GroupMembership.STATUS_REJECTED
                 own_membership.save()
                 _record_group_membership_event(
                     request.user,
                     own_membership,
-                    GroupMembershipEvent.ACTION_REJECTED,
+                    GroupMembershipEvent.ACTION_INVITATION_DECLINED,
+                    previous_status=previous_status,
                 )
             messages.success(request, 'Invitation declined.')
             return redirect('assignment_detail', group.assignment_id)
@@ -2063,17 +2513,28 @@ def group_detail(request, pk):
                     with transaction.atomic():
                         group = Group.objects.select_for_update().get(pk=group.pk)
                         membership_form.group = group
+                        existing_membership = GroupMembership.objects.filter(
+                            assignment=group.assignment,
+                            student=membership_form.cleaned_data['student'],
+                        ).first()
+                        previous_status = (
+                            existing_membership.status
+                            if existing_membership is not None
+                            else ''
+                        )
                         membership = membership_form.save()
                         _record_group_membership_event(
                             request.user,
                             membership,
                             GroupMembershipEvent.ACTION_ADDED,
+                            previous_status=previous_status,
                         )
                         if membership.status == GroupMembership.STATUS_APPROVED:
                             _record_group_membership_event(
                                 request.user,
                                 membership,
                                 GroupMembershipEvent.ACTION_APPROVED,
+                                previous_status=previous_status,
                             )
                         if not group.leader_id and membership.status == GroupMembership.STATUS_APPROVED:
                             group.leader = membership.student

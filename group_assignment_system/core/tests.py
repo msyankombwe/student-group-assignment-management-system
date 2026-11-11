@@ -1446,6 +1446,7 @@ class GroupAssignmentWorkflowTests(TestCase):
                 )
             ),
             {
+                GroupMembershipEvent.ACTION_GROUP_CREATED,
                 GroupMembershipEvent.ACTION_ADDED,
                 GroupMembershipEvent.ACTION_INVITED,
             },
@@ -1638,11 +1639,12 @@ class GroupAssignmentWorkflowTests(TestCase):
                 )
             ),
             {
+                GroupMembershipEvent.ACTION_GROUP_CREATED,
                 GroupMembershipEvent.ACTION_ADDED,
                 GroupMembershipEvent.ACTION_APPROVED,
             },
         )
-        self.assertEqual(GroupMembershipEvent.objects.filter(group=group).count(), 4)
+        self.assertEqual(GroupMembershipEvent.objects.filter(group=group).count(), 5)
 
     def test_administrator_can_create_groups_for_draft_assignments(self):
         draft = Assignment.objects.create(

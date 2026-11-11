@@ -156,6 +156,32 @@ def user_can_appoint_assignment_representative(user, assignment):
     )
 
 
+def record_group_membership_event(
+    actor,
+    assignment,
+    action,
+    group=None,
+    student=None,
+    previous_group=None,
+    previous_status='',
+    new_status='',
+    reason='',
+    representative_appointment=None,
+):
+    return GroupMembershipEvent.objects.create(
+        assignment=assignment,
+        group=group,
+        previous_group=previous_group,
+        student=student,
+        actor=actor,
+        action=action,
+        previous_status=previous_status,
+        new_status=new_status,
+        reason=reason,
+        representative_appointment=representative_appointment,
+    )
+
+
 @transaction.atomic
 def appoint_assignment_class_representative(actor, assignment, student):
     locked_assignment = Assignment.objects.select_for_update().get(pk=assignment.pk)
@@ -172,13 +198,65 @@ def appoint_assignment_class_representative(actor, assignment, student):
         active_appointment.status = AssignmentClassRepresentative.STATUS_REPLACED
         active_appointment.ended_at = timezone.now()
         active_appointment.ended_by = actor
+        active_appointment.end_reason = 'Replaced by a new assignment representative.'
         active_appointment.save()
 
-    return AssignmentClassRepresentative.objects.create(
+        record_group_membership_event(
+            actor=actor,
+            assignment=locked_assignment,
+            action=GroupMembershipEvent.ACTION_REPRESENTATIVE_REPLACED,
+            student=active_appointment.student,
+            representative_appointment=active_appointment,
+            reason=active_appointment.end_reason,
+        )
+
+    appointment = AssignmentClassRepresentative.objects.create(
         assignment=locked_assignment,
         student=student,
         appointed_by=actor,
     )
+    record_group_membership_event(
+        actor=actor,
+        assignment=locked_assignment,
+        action=GroupMembershipEvent.ACTION_REPRESENTATIVE_APPOINTED,
+        student=student,
+        representative_appointment=appointment,
+    )
+    return appointment
+
+
+@transaction.atomic
+def revoke_assignment_class_representative(actor, appointment_id, reason):
+    appointment = AssignmentClassRepresentative.objects.select_for_update().select_related(
+        'assignment__course',
+        'student',
+    ).filter(pk=appointment_id).first()
+    if appointment is None:
+        raise ValidationError('The representative appointment no longer exists.')
+    if not user_can_appoint_assignment_representative(actor, appointment.assignment):
+        raise ValidationError(
+            'Only an administrator or authorized lecturer can revoke this appointment.'
+        )
+    if appointment.status != AssignmentClassRepresentative.STATUS_ACTIVE:
+        raise ValidationError('Only an active representative appointment can be revoked.')
+    reason = (reason or '').strip()
+    if not reason:
+        raise ValidationError({'reason': 'Enter a reason for revoking the appointment.'})
+
+    appointment.status = AssignmentClassRepresentative.STATUS_REMOVED
+    appointment.ended_at = timezone.now()
+    appointment.ended_by = actor
+    appointment.end_reason = reason
+    appointment.save()
+    record_group_membership_event(
+        actor=actor,
+        assignment=appointment.assignment,
+        action=GroupMembershipEvent.ACTION_REPRESENTATIVE_REVOKED,
+        student=appointment.student,
+        representative_appointment=appointment,
+        reason=reason,
+    )
+    return appointment
 
 
 def user_can_manage_assignment_groups(user, assignment):
@@ -257,12 +335,21 @@ def create_assignment_group(actor, assignment, name, description='', max_members
                 formation_type=Group.FORMATION_LECTURER,
                 status=Group.STATUS_ACTIVE,
             )
+            record_group_membership_event(
+                actor=actor,
+                assignment=assignment,
+                group=group,
+                action=GroupMembershipEvent.ACTION_GROUP_CREATED,
+            )
             for student in students:
                 membership = GroupMembership.objects.filter(
                     assignment=assignment,
                     student=student,
                     status=GroupMembership.STATUS_REJECTED,
                 ).first()
+                previous_status = (
+                    membership.status if membership is not None else ''
+                )
                 if membership:
                     membership.group = group
                     membership.status = GroupMembership.STATUS_APPROVED
@@ -275,19 +362,23 @@ def create_assignment_group(actor, assignment, name, description='', max_members
                         status=GroupMembership.STATUS_APPROVED,
                     )
                 membership.save()
-                GroupMembershipEvent.objects.create(
+                record_group_membership_event(
+                    actor=actor,
                     assignment=assignment,
                     group=group,
                     student=student,
-                    actor=actor,
                     action=GroupMembershipEvent.ACTION_ADDED,
+                    previous_status=previous_status,
+                    new_status=membership.status,
                 )
-                GroupMembershipEvent.objects.create(
+                record_group_membership_event(
+                    actor=actor,
                     assignment=assignment,
                     group=group,
                     student=student,
-                    actor=actor,
                     action=GroupMembershipEvent.ACTION_APPROVED,
+                    previous_status=previous_status,
+                    new_status=membership.status,
                 )
             return group
     except IntegrityError as error:
@@ -363,6 +454,7 @@ def transfer_assignment_group_member(actor, membership_id, destination_group_id)
         raise ValidationError('The student already has another membership for this assignment.')
 
     previous_group = source_group
+    previous_status = membership.status
     previous_leader_id = source_group.leader_id
     try:
         with transaction.atomic():
@@ -370,13 +462,15 @@ def transfer_assignment_group_member(actor, membership_id, destination_group_id)
             membership.assignment = assignment
             membership.status = GroupMembership.STATUS_APPROVED
             membership.save()
-            GroupMembershipEvent.objects.create(
+            record_group_membership_event(
+                actor=actor,
                 assignment=assignment,
                 group=destination_group,
                 previous_group=previous_group,
                 student=membership.student,
-                actor=actor,
                 action=GroupMembershipEvent.ACTION_TRANSFERRED,
+                previous_status=previous_status,
+                new_status=membership.status,
             )
             if previous_leader_id == membership.student_id:
                 next_leader = previous_group.memberships.filter(
@@ -392,7 +486,7 @@ def transfer_assignment_group_member(actor, membership_id, destination_group_id)
 
 
 @transaction.atomic
-def dissolve_assignment_group(actor, group_id):
+def dissolve_assignment_group(actor, group_id, reason=''):
     group = Group.objects.select_for_update().select_related(
         'assignment__course',
     ).filter(pk=group_id).first()
@@ -411,6 +505,7 @@ def dissolve_assignment_group(actor, group_id):
         )
     if group.status != Group.STATUS_ACTIVE:
         raise ValidationError('Only active groups can be dissolved.')
+    reason = (reason or '').strip() or 'Archived by an authorized lecturer or administrator.'
 
     memberships = list(
         GroupMembership.objects.select_for_update().filter(group=group).select_related(
@@ -420,13 +515,22 @@ def dissolve_assignment_group(actor, group_id):
     with transaction.atomic():
         for membership in memberships:
             if membership.status != GroupMembership.STATUS_REJECTED:
-                GroupMembershipEvent.objects.create(
+                record_group_membership_event(
+                    actor=actor,
                     assignment=group.assignment,
                     group=group,
                     student=membership.student,
-                    actor=actor,
                     action=GroupMembershipEvent.ACTION_REMOVED,
+                    previous_status=membership.status,
+                    reason=reason,
                 )
+        record_group_membership_event(
+            actor=actor,
+            assignment=group.assignment,
+            group=group,
+            action=GroupMembershipEvent.ACTION_GROUP_ARCHIVED,
+            reason=reason,
+        )
         GroupMembership.objects.filter(pk__in=[
             membership.pk for membership in memberships
         ]).delete()

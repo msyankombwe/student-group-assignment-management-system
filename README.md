@@ -29,7 +29,7 @@ The Django models and migrations are the source of truth for the relational sche
 cd "C:\Users\morga\Documents\Group assignment management"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 copy .env.example .env
 cd group_assignment_system
 python manage.py migrate
@@ -60,6 +60,12 @@ Open http://127.0.0.1:8000/ and sign in with a demo account below.
 6. Log in as a group student (`student01`) to view published instructions, deadlines, membership status, post a message, update tasks, and submit work.
 7. As lecturer, review group communication and documents, review the submission, release feedback, and monitor contribution records.
 
+## Assignment representatives
+
+An administrator or lecturer who manages an assignment can appoint one active student representative from that assignment's course on the assignment detail page. The candidate list is limited to active, enrolled students and displays their student ID and full name. Appointing a replacement closes the prior appointment; revocation requires a reason. Appointment, replacement, revocation, and representative group actions are recorded in the immutable group membership audit history.
+
+Representatives may create and manage groups and memberships only for the exact group assignment to which they are appointed, and only while they remain active and enrolled in its course. Student allocation is restricted server-side to active students enrolled in the assignment course; duplicate assignment memberships and capacity violations are rejected. Representatives cannot edit assignment instructions, manage grading or feedback, approve/reject proposals, or dissolve groups. Lecturers retain oversight and can edit groups, correct memberships, review audit history, and manage grading and feedback. These controls are enforced by Django views, forms, services, and API permissions; hiding a page control is not the security boundary.
+
 ## Submission and feedback boundary
 
 SGAMS records group submission files, timestamps, workflow status, optional evidence notes, and optional Moodle course/activity or receipt URLs. A Moodle reference is metadata only: SGAMS does not upload to Moodle, verify a Moodle receipt, or synchronize official grades. Submit through Moodle separately whenever required by the course. Lecturer assessment and feedback stored in SGAMS are not official Moodle grades unless an approved integration is later implemented and tested.
@@ -69,6 +75,9 @@ SGAMS records group submission files, timestamps, workflow status, optional evid
 ```powershell
 cd group_assignment_system
 python manage.py test core
+python manage.py test core.tests_audit_dashboard
+python manage.py check
+python manage.py makemigrations --check --dry-run
 ```
 
 ## Notifications and deadline reminders

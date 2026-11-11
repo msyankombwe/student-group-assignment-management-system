@@ -52,6 +52,7 @@ urlpatterns = [
     path('groups/', views.group_list, name='group_list'),
     path('tasks/', views.task_list, name='task_list'),
     path('reports/', views.reports, name='reports'),
+    path('audit/group-activity/', views.audit_dashboard, name='audit_dashboard'),
     path('contributions/', views.contribution_report, name='contribution_report'),
     path('profile/', views.profile, name='profile'),
     path('courses/', views.course_list, name='course_list'),
