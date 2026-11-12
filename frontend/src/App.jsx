@@ -5,7 +5,7 @@ import { filterTasks } from './taskFilters.js'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
-const DJANGO_BASE = (import.meta.env.VITE_DJANGO_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')
+const DJANGO_BASE = (import.meta.env.VITE_DJANGO_BASE_URL || 'http://localhost:8002').replace(/\/$/, '')
 const EMPTY_API_LIST = []
 const YEAR_OF_STUDY_OPTIONS = [1, 2, 3, 4]
 const SEMESTER_OPTIONS = [1, 2]

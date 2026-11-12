@@ -23,6 +23,33 @@ This system is a **collaborative management layer that complements the UNILUS LM
 
 The Django models and migrations are the source of truth for the relational schema. See [DATABASE_ERD.md](./DATABASE_ERD.md) for the entity relationship diagram, key constraints, and migration notes. Apply schema changes with `python manage.py migrate` from `group_assignment_system/`.
 
+## Local development ports
+
+The local development ports are reserved as follows:
+
+| Application | URL | Port | Startup |
+| --- | --- | ---: | --- |
+| Human Resource Management System (HRMS) | http://127.0.0.1:8001/ | 8001 | Run `run_hrms.bat` from the HRMS project directory |
+| Student Group Assignment Management System (SGAMS) | http://127.0.0.1:8002/ | 8002 | Run `run_sgams.bat` from this repository |
+| Future applications | — | 8003 | Reserved |
+
+SGAMS uses the existing repository virtual environment at `.venv`. Its batch file
+activates that environment and starts Django from `group_assignment_system/`.
+The HRMS batch file uses the existing sibling environment at `..\hrms-venv`.
+Both scripts check for an occupied port and report which application port is
+unavailable; neither switches to another port. The applications retain their
+own settings, databases, and media directories.
+
+To start SGAMS manually, activate `.venv`, change to `group_assignment_system/`,
+and run `python manage.py runserver 127.0.0.1:8002`.
+
+### Troubleshooting port conflicts
+
+If a startup script reports that its port is already in use, stop the other
+process using that same port and retry. In PowerShell, inspect the listener with
+`Get-NetTCPConnection -LocalPort 8001 -State Listen` or change `8001` to `8002`
+for SGAMS. Do not start either app on the other app's port.
+
 ## Quick start
 
 ```powershell
@@ -34,10 +61,10 @@ copy .env.example .env
 cd group_assignment_system
 python manage.py migrate
 python manage.py seed_demo_data
-python manage.py runserver
+python manage.py runserver 127.0.0.1:8002
 ```
 
-Open http://127.0.0.1:8000/ and sign in with a demo account below.
+Open http://127.0.0.1:8002/ and sign in with a demo account below.
 
 ### Demo accounts (fictional only)
 
@@ -99,6 +126,7 @@ Group assignment management/
   requirements.txt
   .env.example
   README.md
+  run_sgams.bat
   REQUIREMENTS_TRACEABILITY.md
   frontend/                 # optional React scaffold (not primary UI)
   group_assignment_system/

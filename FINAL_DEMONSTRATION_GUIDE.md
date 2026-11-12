@@ -142,10 +142,10 @@ The seed content is for presentation and test data only. It must not be represen
 From `group_assignment_system/`:
 
 ```powershell
-python manage.py runserver 127.0.0.1:8000
+python manage.py runserver 127.0.0.1:8002
 ```
 
-Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) and sign in using a demo account. Stop the development server with `Ctrl+C`.
+Open [http://127.0.0.1:8002/](http://127.0.0.1:8002/) and sign in using a demo account. Stop the development server with `Ctrl+C`.
 
 Optional pre-demo checks:
 

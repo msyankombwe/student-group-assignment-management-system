@@ -3,7 +3,7 @@ import { defineConfig, loadEnv } from 'vite'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const djangoBaseUrl = (env.VITE_DJANGO_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')
+  const djangoBaseUrl = (env.VITE_DJANGO_BASE_URL || 'http://127.0.0.1:8002').replace(/\/$/, '')
 
   return {
     plugins: [react()],

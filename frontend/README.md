@@ -11,7 +11,8 @@ notifications, and profile management.
 
 ## Run locally
 
-Start Django on `http://localhost:8000`, then run:
+Start SGAMS Django on `http://127.0.0.1:8002` (or use `run_sgams.bat` from
+the repository root), then run:
 
 ```sh
 npm install
@@ -23,14 +24,13 @@ session-authenticated API requests. Django exposes `/api/csrf/` to establish a
 CSRF cookie before the frontend checks `/api/session/`. The shared Axios client
 sends session credentials and uses Django's `csrftoken` cookie and
 `X-CSRFToken` header for unsafe requests; Django's CSRF middleware remains
-enabled. Use the `http://localhost:5173` frontend address with the default
-Django `http://localhost:8000` address; using
-`127.0.0.1` for one and `localhost` for the other prevents the browser from
-sending the same host-scoped session cookie. Set `VITE_DJANGO_BASE_URL` when
-Django is running at a different origin; this value also configures the Vite
-API proxy. Set `VITE_API_BASE_URL` only when the API is served at a different
-path/origin. Production deployments should proxy the API under the frontend
-origin or configure Django's trusted origins and credentialed CORS explicitly.
+enabled. If using the Vite frontend, use the same hostname (`localhost` or
+`127.0.0.1`) for both frontend and Django so the browser sends the same
+host-scoped session cookie. Set `VITE_DJANGO_BASE_URL` when Django is running
+at a different origin; this value also configures the Vite API proxy. Set
+`VITE_API_BASE_URL` only when the API is served at a different path/origin.
+Production deployments should proxy the API under the frontend origin or
+configure Django's trusted origins and credentialed CORS explicitly.
 
 ## Authentication and role navigation
 
